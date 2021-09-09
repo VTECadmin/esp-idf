@@ -122,7 +122,7 @@ static esp_err_t ksz8863_get_link(esp_eth_phy_t *phy)
             ESP_LOGI(TAG, "Link from 1");
             phy->negotiate(phy,0);
         }
-        if (link1 == ETH_LINK_UP) {
+        else if (link1 == ETH_LINK_UP) {
             ESP_LOGI(TAG, "Link from 2");
             phy->negotiate(phy,1);
         }
