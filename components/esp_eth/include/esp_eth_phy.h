@@ -107,7 +107,7 @@ struct esp_eth_phy_s {
     *      - ESP_FAIL: restart auto negotiation failed because some error occurred
     *
     */
-    esp_err_t (*negotiate)(esp_eth_phy_t *phy);
+    esp_err_t (*negotiate)(esp_eth_phy_t *phy, uint8_t address);
 
     /**
     * @brief Get Ethernet PHY link status

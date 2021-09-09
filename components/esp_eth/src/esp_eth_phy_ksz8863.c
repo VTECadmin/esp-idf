@@ -94,13 +94,39 @@ static esp_err_t ksz8863_get_link(esp_eth_phy_t *phy)
     phy_ksz8863_t *ksz8863 = __containerof(phy, phy_ksz8863_t, parent);
     esp_eth_mediator_t *eth = ksz8863->eth;
     bmsr_reg_t bmsr;
+    bmsr_reg_t bmsr1;
 
     PHY_CHECK(eth->phy_reg_read(eth, ksz8863->addr, ETH_PHY_BMSR_REG_ADDR, &(bmsr.val)) == ESP_OK, "read BMSR failed", err);
+    PHY_CHECK(eth->phy_reg_read(eth, (ksz8863->addr + 1), ETH_PHY_BMSR_REG_ADDR, &(bmsr1.val)) == ESP_OK, "read BMSR failed", err);
     eth_link_t link = bmsr.link_status ? ETH_LINK_UP : ETH_LINK_DOWN;
-    if (ksz8863->link_status != link) {
+    eth_link_t link1 = bmsr1.link_status ? ETH_LINK_UP : ETH_LINK_DOWN;
+    eth_link_t masterlink;
+    if(link == ETH_LINK_UP)
+	{
+		masterlink = ETH_LINK_UP;
+	}
+	else if(link1 == ETH_LINK_UP)
+	{
+		masterlink = ETH_LINK_UP;
+	}
+	else
+	{
+        masterlink = ETH_LINK_DOWN;
+	}
+
+    // ESP_LOGI(TAG, "bmsr0: %d", bmsr.link_status);
+    // ESP_LOGI(TAG, "bmsr1: %d", bmsr1.link_status);
+
+    if (ksz8863->link_status != masterlink) {
         if (link == ETH_LINK_UP) {
-            phy->negotiate(phy);
-        } else {
+            ESP_LOGI(TAG, "Link from 1");
+            phy->negotiate(phy,0);
+        }
+        if (link1 == ETH_LINK_UP) {
+            ESP_LOGI(TAG, "Link from 2");
+            phy->negotiate(phy,1);
+        }
+        else {
             PHY_CHECK(eth->on_state_changed(eth, ETH_STATE_LINK, (void *)link) == ESP_OK, "send link event failed", err);
             ksz8863->link_status = link;
         }
@@ -143,7 +169,7 @@ err:
     return ESP_FAIL;
 }
 
-static esp_err_t ksz8863_negotiate(esp_eth_phy_t *phy)
+static esp_err_t ksz8863_negotiate(esp_eth_phy_t *phy, uint8_t address)
 {
     ESP_LOGI(TAG, "Autonegotiate");
 	phy_ksz8863_t *ksz8863 = __containerof(phy, phy_ksz8863_t, parent);
@@ -155,13 +181,13 @@ static esp_err_t ksz8863_negotiate(esp_eth_phy_t *phy)
         .en_auto_nego = 1,     /* Auto Negotiation */
         .restart_auto_nego = 1 /* Restart Auto Negotiation */
     };
-    PHY_CHECK(eth->phy_reg_write(eth, ksz8863->addr, ETH_PHY_BMCR_REG_ADDR, bmcr.val) == ESP_OK, "write BMCR failed", err);
+    PHY_CHECK(eth->phy_reg_write(eth, (ksz8863->addr + address), ETH_PHY_BMCR_REG_ADDR, bmcr.val) == ESP_OK, "write BMCR failed", err);
     /* Wait for auto negotiation complete */
     bmsr_reg_t bmsr;
     uint32_t to = 0;
     for (to = 0; to < ksz8863->autonego_timeout_ms / 10; to++) {
         vTaskDelay(pdMS_TO_TICKS(10));
-        PHY_CHECK(eth->phy_reg_read(eth, ksz8863->addr, ETH_PHY_BMSR_REG_ADDR, &(bmsr.val)) == ESP_OK, "read BMSR failed", err);
+        PHY_CHECK(eth->phy_reg_read(eth, (ksz8863->addr + address), ETH_PHY_BMSR_REG_ADDR, &(bmsr.val)) == ESP_OK, "read BMSR failed", err);
         if (bmsr.auto_nego_complete) {
             break;
         }
@@ -171,7 +197,7 @@ static esp_err_t ksz8863_negotiate(esp_eth_phy_t *phy)
         ESP_LOGW(TAG, "Ethernet PHY auto negotiation timeout");
     }
     /* Update information about link, speed, duplex */
-    PHY_CHECK(eth->phy_reg_read(eth, ksz8863->addr, ETH_PHY_BMSR_REG_ADDR, &(bmsr.val)) == ESP_OK, "read BMSR failed", err);
+    PHY_CHECK(eth->phy_reg_read(eth, (ksz8863->addr + address), ETH_PHY_BMSR_REG_ADDR, &(bmsr.val)) == ESP_OK, "read BMSR failed", err);
     eth_link_t link = bmsr.link_status ? ETH_LINK_UP : ETH_LINK_DOWN;
     eth_speed_t speed = ETH_SPEED_10M;
     eth_duplex_t duplex = ETH_DUPLEX_HALF;
