@@ -18,6 +18,12 @@ ESP-IDF 编程指南
 
     本文档仅包含针对 {IDF_TARGET_NAME} 芯片的 ESP-IDF 使用。
 
+.. only:: esp32s3
+
+    .. warning::
+
+        ESP32-S3 的相关文档尚未全部更新完毕。
+
 ==================  ==================  ==================
 |快速入门|_          |API 参考|_         |H/W 参考|_
 ------------------  ------------------  ------------------
@@ -56,6 +62,7 @@ ESP-IDF 编程指南
    API 参考 <api-reference/index>
    H/W 参考 <hw-reference/index>
    API 指南 <api-guides/index>
+   ESP-IDF 5.0 迁移指南 <migration-guides/index>
    Libraries and Frameworks <libraries-and-frameworks/index>
    贡献代码 <contribute/index>
    版本 <versions>

@@ -1,30 +1,66 @@
 idf_build_get_property(target IDF_TARGET)
 
-set(sources "patches/esp_rom_crc.c"
-            "patches/esp_rom_sys.c"
-            "patches/esp_rom_uart.c")
+set(include_dirs "include" "include/${target}")
+
+set(private_required_comp "")
+
+set(sources "")
+
+if(target STREQUAL "linux")
+    list(APPEND sources "${target}/esp_rom_sys.c"
+                        "${target}/esp_rom_crc.c"
+                        "${target}/esp_rom_md5.c"
+                        "${target}/esp_rom_efuse.c")
+else()
+    list(APPEND include_dirs "${target}")
+    list(APPEND sources "patches/esp_rom_crc.c"
+                        "patches/esp_rom_sys.c"
+                        "patches/esp_rom_uart.c"
+                        "patches/esp_rom_tjpgd.c")
+    list(APPEND private_required_comp soc hal)
+endif()
 
 if(CONFIG_IDF_TARGET_ARCH_XTENSA)
     list(APPEND sources "patches/esp_rom_longjmp.S")
 endif()
 
 idf_component_register(SRCS ${sources}
-                       INCLUDE_DIRS include "${target}"
-                       PRIV_REQUIRES soc hal)
+                       INCLUDE_DIRS ${include_dirs}
+                       PRIV_REQUIRES ${private_required_comp})
+
+if(target STREQUAL "esp32h2")
+    if(CONFIG_IDF_TARGET_ESP32H2_BETA_VERSION_1)
+        set(ld_folder "ld/rev1")
+    elseif(CONFIG_IDF_TARGET_ESP32H2_BETA_VERSION_2)
+        set(ld_folder "ld/rev2")
+    endif()
+else()
+    set(ld_folder "ld")
+endif()
 
 # Append a target linker script at the target-specific path,
 # only the 'name' part is different for each script
 function(rom_linker_script name)
-    target_linker_script(${COMPONENT_LIB} INTERFACE "${target}/ld/${target}.rom.${name}.ld")
+    target_linker_script(${COMPONENT_LIB} INTERFACE "${target}/${ld_folder}/${target}.rom.${name}.ld")
 endfunction()
 
-target_linker_script(${COMPONENT_LIB} INTERFACE "${target}/ld/${target}.rom.ld")
-rom_linker_script("api")
-rom_linker_script("libgcc")
+if(target STREQUAL "linux")
+    # We need to disable some warnings due to the ROM code's printf implementation
+    if(${CMAKE_CXX_COMPILER_VERSION} GREATER "7.0.0") # TODO: clang compatibility
+        target_compile_options(${COMPONENT_LIB} PUBLIC -Wimplicit-fallthrough=0 -Wno-shift-count-overflow)
+    endif()
+else()
+    target_linker_script(${COMPONENT_LIB} INTERFACE "${target}/${ld_folder}/${target}.rom.ld")
+    rom_linker_script("api")
+    rom_linker_script("libgcc")
+endif()
 
 if(BOOTLOADER_BUILD)
     if(target STREQUAL "esp32")
         rom_linker_script("newlib-funcs")
+        if(NOT CONFIG_SPI_FLASH_ROM_DRIVER_PATCH)
+            rom_linker_script("spiflash")
+        endif()
         if(CONFIG_ESP32_REV_MIN_3)
             rom_linker_script("eco3")
         endif()
@@ -38,6 +74,13 @@ if(BOOTLOADER_BUILD)
 
     elseif(target STREQUAL "esp32c3")
         rom_linker_script("newlib")
+
+    elseif(target STREQUAL "esp32h2")
+        rom_linker_script("newlib")
+
+    elseif(target STREQUAL "esp8684")
+        rom_linker_script("newlib")
+        rom_linker_script("mbedtls")
     endif()
 
 else() # Regular app build
@@ -99,6 +142,23 @@ else() # Regular app build
 
         if(CONFIG_ESP32C3_REV_MIN_3)
             rom_linker_script("eco3")
+        endif()
+
+    elseif(target STREQUAL "esp32h2")
+        rom_linker_script("newlib")
+        rom_linker_script("version")
+
+        if(CONFIG_NEWLIB_NANO_FORMAT)
+            rom_linker_script("newlib-nano")
+        endif()
+
+    elseif(target STREQUAL "esp8684")
+        rom_linker_script("newlib")
+        rom_linker_script("version")
+        rom_linker_script("mbedtls")
+
+        if(CONFIG_NEWLIB_NANO_FORMAT)
+            rom_linker_script("newlib-nano")
         endif()
     endif()
 

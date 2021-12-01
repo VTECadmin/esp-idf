@@ -67,15 +67,15 @@ const static char *TAG = "esp_apptrace_test";
 
 static void esp_apptrace_test_timer_init(int timer_group, int timer_idx, uint32_t period)
 {
-    timer_config_t config;
     uint64_t alarm_val = (period * (TIMER_BASE_CLK / 1000000UL)) / 2;
-
-    config.alarm_en = 1;
-    config.auto_reload = 1;
-    config.counter_dir = TIMER_COUNT_UP;
-    config.divider = 2;     //Range is 2 to 65536
-    config.intr_type = TIMER_INTR_LEVEL;
-    config.counter_en = TIMER_PAUSE;
+    timer_config_t config = {
+        .alarm_en = 1,
+        .auto_reload = 1,
+        .counter_dir = TIMER_COUNT_UP,
+        .divider = 2,     //Range is 2 to 65536
+        .intr_type = TIMER_INTR_LEVEL,
+        .counter_en = TIMER_PAUSE,
+    };
     /*Configure timer*/
     timer_init(timer_group, timer_idx, &config);
     /*Stop timer counter*/
@@ -88,7 +88,7 @@ static void esp_apptrace_test_timer_init(int timer_group, int timer_idx, uint32_
     timer_enable_intr(timer_group, timer_idx);
 }
 
-#if CONFIG_SYSVIEW_ENABLE == 0
+#if CONFIG_APPTRACE_SV_ENABLE == 0
 #define ESP_APPTRACE_TEST_WRITE(_b_, _s_)            esp_apptrace_write(ESP_APPTRACE_DEST_TRAX, _b_, _s_, ESP_APPTRACE_TMO_INFINITE)
 #define ESP_APPTRACE_TEST_WRITE_FROM_ISR(_b_, _s_)   esp_apptrace_write(ESP_APPTRACE_DEST_TRAX, _b_, _s_, 0UL)
 #define ESP_APPTRACE_TEST_WRITE_NOWAIT(_b_, _s_)     esp_apptrace_write(ESP_APPTRACE_DEST_TRAX, _b_, _s_, 0)
@@ -214,7 +214,7 @@ static void esp_apptrace_dummy_task(void *p)
 
     i = 0;
     while (!arg->stop) {
-        ESP_APPTRACE_TEST_LOGD("%x: dummy task work %d.%d", xTaskGetCurrentTaskHandle(), xPortGetCoreID(), i++);
+        ESP_APPTRACE_TEST_LOGD("%x: dummy task work %d.%d", xTaskGetCurrentTaskHandle(), cpu_hal_get_core_id(), i++);
         if (tmo_ticks) {
             vTaskDelay(tmo_ticks);
         }
@@ -259,7 +259,7 @@ static void esp_apptrace_test_task(void *p)
                 ESP_APPTRACE_TEST_LOGE("Failed to timer_isr_register (%d)!", res);
                 goto on_fail;
             }
-            *(uint32_t *)arg->timers[i].data.buf = ((uint32_t)inth[i]) | (1 << 31) | (xPortGetCoreID() ? 0x1 : 0);
+            *(uint32_t *)arg->timers[i].data.buf = ((uint32_t)inth[i]) | (1 << 31) | (cpu_hal_get_core_id() ? 0x1 : 0);
             ESP_APPTRACE_TEST_LOGI("%x: start timer %x period %u us", xTaskGetCurrentTaskHandle(), inth[i], arg->timers[i].data.period);
             res = timer_start(arg->timers[i].group, arg->timers[i].id);
             if (res != ESP_OK) {
@@ -269,7 +269,7 @@ static void esp_apptrace_test_task(void *p)
         }
     }
 
-    *(uint32_t *)arg->data.buf = (uint32_t)xTaskGetCurrentTaskHandle() | (xPortGetCoreID() ? 0x1 : 0);
+    *(uint32_t *)arg->data.buf = (uint32_t)xTaskGetCurrentTaskHandle() | (cpu_hal_get_core_id() ? 0x1 : 0);
     arg->data.wr_cnt = 0;
     arg->data.wr_err = 0;
     while (!arg->stop) {
@@ -358,7 +358,6 @@ static uint64_t esp_apptrace_test_ts_get(void)
 
 static void esp_apptrace_test_ts_init(int timer_group, int timer_idx)
 {
-    timer_config_t config;
     //uint64_t alarm_val = period * (TIMER_BASE_CLK / 1000000UL);
 
     ESP_APPTRACE_TEST_LOGI("Use timer%d.%d for TS", timer_group, timer_idx);
@@ -366,11 +365,13 @@ static void esp_apptrace_test_ts_init(int timer_group, int timer_idx)
     s_ts_timer_group = timer_group;
     s_ts_timer_idx = timer_idx;
 
-    config.alarm_en = 0;
-    config.auto_reload = 0;
-    config.counter_dir = TIMER_COUNT_UP;
-    config.divider = 2;     //Range is 2 to 65536
-    config.counter_en = 0;
+    timer_config_t config = {
+        .alarm_en = 0,
+        .auto_reload = 0,
+        .counter_dir = TIMER_COUNT_UP,
+        .divider = 2,     //Range is 2 to 65536
+        .counter_en = 0,
+    };
     /*Configure timer*/
     timer_init(timer_group, timer_idx, &config);
     /*Load counter value */
@@ -381,13 +382,13 @@ static void esp_apptrace_test_ts_init(int timer_group, int timer_idx)
 
 static void esp_apptrace_test_ts_cleanup(void)
 {
-    timer_config_t config;
-
-    config.alarm_en = 0;
-    config.auto_reload = 0;
-    config.counter_dir = TIMER_COUNT_UP;
-    config.divider = 2;     //Range is 2 to 65536
-    config.counter_en = 0;
+    timer_config_t config = {
+        .alarm_en = 0,
+        .auto_reload = 0,
+        .counter_dir = TIMER_COUNT_UP,
+        .divider = 2,     //Range is 2 to 65536
+        .counter_en = 0,
+    };
     /*Configure timer*/
     timer_init(s_ts_timer_group, s_ts_timer_idx, &config);
 }
@@ -749,7 +750,7 @@ static void esp_logtrace_task(void *p)
         ESP_LOGI(TAG, "%p: sample print 4 %c", xTaskGetCurrentTaskHandle(), ((i & 0xFF) % 95) + 32);
         ESP_LOGI(TAG, "%p: sample print 5 %f", xTaskGetCurrentTaskHandle(), 1.0);
         ESP_LOGI(TAG, "%p: sample print 6 %f", xTaskGetCurrentTaskHandle(), 3.45);
-        ESP_LOGI(TAG, "%p: logtrace task work %d.%d", xTaskGetCurrentTaskHandle(), xPortGetCoreID(), i);
+        ESP_LOGI(TAG, "%p: logtrace task work %d.%d", xTaskGetCurrentTaskHandle(), cpu_hal_get_core_id(), i);
         if (++i == 10000) {
             break;
         }

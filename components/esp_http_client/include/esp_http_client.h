@@ -1,16 +1,8 @@
-// Copyright 2015-2018 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #ifndef _ESP_HTTP_CLIENT_H
 #define _ESP_HTTP_CLIENT_H
@@ -121,6 +113,8 @@ typedef struct {
     size_t                      client_cert_len;     /*!< Length of the buffer pointed to by client_cert_pem. May be 0 for null-terminated pem */
     const char                  *client_key_pem;     /*!< SSL client key, PEM format as string, if the server requires to verify client */
     size_t                      client_key_len;      /*!< Length of the buffer pointed to by client_key_pem. May be 0 for null-terminated pem */
+    const char                  *client_key_password;      /*!< Client key decryption password string */
+    size_t                      client_key_password_len;   /*!< String length of the password pointed to by client_key_password */
     const char                  *user_agent;         /*!< The User Agent string to send with HTTP requests */
     esp_http_client_method_t    method;                   /*!< HTTP Method */
     int                         timeout_ms;               /*!< Network timeout in milliseconds */
@@ -158,6 +152,7 @@ typedef enum {
     HttpStatus_TemporaryRedirect = 307,
 
     /* 4xx - Client Error */
+    HttpStatus_BadRequest        = 400,
     HttpStatus_Unauthorized      = 401,
     HttpStatus_Forbidden         = 403,
     HttpStatus_NotFound          = 404,
@@ -174,6 +169,7 @@ typedef enum {
 #define ESP_ERR_HTTP_INVALID_TRANSPORT  (ESP_ERR_HTTP_BASE + 5)     /*!< There are no transport support for the input scheme */
 #define ESP_ERR_HTTP_CONNECTING         (ESP_ERR_HTTP_BASE + 6)     /*!< HTTP connection hasn't been established yet */
 #define ESP_ERR_HTTP_EAGAIN             (ESP_ERR_HTTP_BASE + 7)     /*!< Mapping of errno EAGAIN to esp_err_t */
+#define ESP_ERR_HTTP_CONNECTION_CLOSED  (ESP_ERR_HTTP_BASE + 8)     /*!< Read FIN from peer and the connection closed */
 
 /**
  * @brief      Start a HTTP session
@@ -349,6 +345,17 @@ esp_err_t esp_http_client_set_password(esp_http_client_handle_t client, const ch
 esp_err_t esp_http_client_set_authtype(esp_http_client_handle_t client, esp_http_client_auth_type_t auth_type);
 
 /**
+ * @brief      Get HTTP client session errno
+ *
+ * @param[in]  client  The esp_http_client handle
+ *
+ * @return
+ *         - (-1) if invalid argument
+ *         - errno
+ */
+int esp_http_client_get_errno(esp_http_client_handle_t client);
+
+/**
  * @brief      Set http request method
  *
  * @param[in]  client  The esp_http_client handle
@@ -419,7 +426,7 @@ int esp_http_client_write(esp_http_client_handle_t client, const char *buffer, i
  *     - (-1: ESP_FAIL) if any errors
  *     - Download data length defined by content-length header
  */
-int esp_http_client_fetch_headers(esp_http_client_handle_t client);
+int64_t esp_http_client_fetch_headers(esp_http_client_handle_t client);
 
 
 /**
@@ -464,7 +471,7 @@ int esp_http_client_get_status_code(esp_http_client_handle_t client);
  *     - (-1) Chunked transfer
  *     - Content-Length value as bytes
  */
-int esp_http_client_get_content_length(esp_http_client_handle_t client);
+int64_t esp_http_client_get_content_length(esp_http_client_handle_t client);
 
 /**
  * @brief      Close http connection, still kept all http request resources

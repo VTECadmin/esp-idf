@@ -1,16 +1,8 @@
-// Copyright 2018 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2018-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <string.h>
 #include <sys/socket.h>
@@ -458,7 +450,11 @@ esp_err_t httpd_stop(httpd_handle_t handle)
     struct httpd_ctrl_data msg;
     memset(&msg, 0, sizeof(msg));
     msg.hc_msg = HTTPD_CTRL_SHUTDOWN;
-    cs_send_to_ctrl_sock(hd->msg_fd, hd->config.ctrl_port, &msg, sizeof(msg));
+    int ret = 0;
+    if ((ret = cs_send_to_ctrl_sock(hd->msg_fd, hd->config.ctrl_port, &msg, sizeof(msg))) < 0) {
+        ESP_LOGE(TAG, "Failed to send shutdown signal err=%d", ret);
+        return ESP_FAIL;
+    }
 
     ESP_LOGD(TAG, LOG_FMT("sent control msg to stop server"));
     while (hd->hd_td.status != THREAD_STOPPED) {

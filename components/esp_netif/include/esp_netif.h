@@ -1,16 +1,8 @@
-// Copyright 2019 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2019-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #ifndef _ESP_NETIF_H_
 #define _ESP_NETIF_H_
@@ -165,6 +157,88 @@ esp_err_t esp_netif_receive(esp_netif_t *esp_netif, void *buffer, size_t len, vo
  */
 
 /**
+ * @defgroup ESP_NETIF_L2_TAP_CTRL ESP-NETIF L2 TAP Control API
+ * @brief Functions to control access to ESP-NETIF Data link layer
+ */
+
+/** @addtogroup ESP_NETIF_L2_TAP_CTRL
+ * @{
+ */
+
+/**
+ * @brief Add transmit hook callback function reference into ESP-NETIF. This callback function
+ *        is then called just prior the ESP-NETIF passes data to network driver.
+ *
+ * @param[in] esp_netif Handle to esp-netif instance
+ * @param[in] hook_fn reference to transmit hook call-back function
+ * @return
+ *         - ESP_OK - success
+ *         - ESP_ERR_INVALID_ARG
+ */
+esp_err_t esp_netif_transmit_hook_attach(esp_netif_t *esp_netif, void *hook_fn);
+
+/**
+ * @brief Add post transmit hook callback function reference into ESP-NETIF. This callback function
+ *        is then called just after the ESP-NETIF passes data to network driver.
+ *
+ * @note Intention of this function is either to release resources allocated by transmit hook function
+ *       or for other use cases such as time stamping, etc.
+ *
+ * @param[in] esp_netif Handle to esp-netif instance
+ * @param[in] hook_fn reference to post transmit hook call-back function
+ * @return
+ *         - ESP_OK - success
+ *         - ESP_ERR_INVALID_ARG
+ */
+esp_err_t esp_netif_post_transmit_hook_attach(esp_netif_t *esp_netif, void *hook_fn);
+
+/**
+ * @brief Add receive hook callback function reference into ESP-NETIF. This callback function
+ *        is then called when network driver receives data.
+ *
+ * @param[in] esp_netif Handle to esp-netif instance
+ * @param[in] hook_fn reference to receive hook callback function
+ * @return
+ *         - ESP_OK - success
+ *         - ESP_ERR_INVALID_ARG
+ */
+esp_err_t esp_netif_recv_hook_attach(esp_netif_t *esp_netif, void *hook_fn);
+
+/**
+ * @brief Removes reference to previously attachhed transmit hook callback function
+ *
+ * @param[in] esp_netif Handle to esp-netif instance
+ * @return
+ *         - ESP_OK - success
+ *         - ESP_ERR_INVALID_ARG
+ */
+esp_err_t esp_netif_transmit_hook_detach(esp_netif_t *esp_netif);
+
+/**
+ * @brief Removes reference to previously attachhed posttransmit hook callback function
+ *
+ * @param[in] esp_netif Handle to esp-netif instance
+ * @return
+ *         - ESP_OK - success
+ *         - ESP_ERR_INVALID_ARG
+ */
+esp_err_t esp_netif_post_transmit_hook_detach(esp_netif_t *esp_netif);
+
+/**
+ * @brief Removes reference to previously attachhed receive hook callback function
+ *
+ * @param[in] esp_netif Handle to esp-netif instance
+ * @return
+ *         - ESP_OK - success
+ *         - ESP_ERR_INVALID_ARG
+ */
+esp_err_t esp_netif_recv_hook_detach(esp_netif_t *esp_netif);
+
+/**
+ * @}
+ */
+
+/**
  * @defgroup ESP_NETIF_LIFECYCLE ESP-NETIF Lifecycle control
  * @brief These APIS define basic building blocks to control network interface lifecycle, i.e.
  * start, stop, set_up or set_down. These functions can be directly used as event handlers
@@ -236,6 +310,54 @@ void esp_netif_action_disconnected(void *esp_netif, esp_event_base_t base, int32
  * @param data
  */
 void esp_netif_action_got_ip(void *esp_netif, esp_event_base_t base, int32_t event_id, void *data);
+
+/**
+ * @brief Default building block for network interface action upon IPv6 multicast group join
+ *
+ * @note This API can be directly used as event handler
+ *
+ * @param[in]  esp_netif Handle to esp-netif instance
+ * @param base
+ * @param event_id
+ * @param data
+ */
+void esp_netif_action_join_ip6_multicast_group(void *esp_netif, esp_event_base_t base, int32_t event_id, void *data);
+
+/**
+ * @brief Default building block for network interface action upon IPv6 multicast group leave
+ *
+ * @note This API can be directly used as event handler
+ *
+ * @param[in]  esp_netif Handle to esp-netif instance
+ * @param base
+ * @param event_id
+ * @param data
+ */
+void esp_netif_action_leave_ip6_multicast_group(void *esp_netif, esp_event_base_t base, int32_t event_id, void *data);
+
+/**
+ * @brief Default building block for network interface action upon IPv6 address added by the underlying stack
+ *
+ * @note This API can be directly used as event handler
+ *
+ * @param[in]  esp_netif Handle to esp-netif instance
+ * @param base
+ * @param event_id
+ * @param data
+ */
+void esp_netif_action_add_ip6_address(void *esp_netif, esp_event_base_t base, int32_t event_id, void *data);
+
+/**
+ * @brief Default building block for network interface action upon IPv6 address removed by the underlying stack
+ *
+ * @note This API can be directly used as event handler
+ *
+ * @param[in]  esp_netif Handle to esp-netif instance
+ * @param base
+ * @param event_id
+ * @param data
+ */
+void esp_netif_action_remove_ip6_address(void *esp_netif, esp_event_base_t base, int32_t event_id, void *data);
 
 /**
  * @}

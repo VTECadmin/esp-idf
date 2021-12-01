@@ -1,6 +1,6 @@
 # This script should be sourced, not executed.
 
-function idf_export_main
+function __main
     if not set -q IDF_PATH
         echo "IDF_PATH must be set before sourcing this script"
         return 1
@@ -65,8 +65,14 @@ function idf_export_main
     echo ""
 end
 
-idf_export_main
+__main
 
-eval (env _IDF.PY_COMPLETE=source_fish idf.py)
+set click_version (python -c 'import click; print(click.__version__.split(".")[0])')
+if test $click_version -lt 8
+    eval (env _IDF.PY_COMPLETE=source_fish idf.py)
+else
+    eval (env _IDF.PY_COMPLETE=fish_source idf.py)
+end
 
-set -e idf_export_main
+
+set -e __main

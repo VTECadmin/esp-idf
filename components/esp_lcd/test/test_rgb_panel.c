@@ -8,29 +8,32 @@
 
 #define TEST_LCD_H_RES         (480)
 #define TEST_LCD_V_RES         (272)
-#define TEST_LCD_VSYNC_GPIO    (19)
-#define TEST_LCD_HSYNC_GPIO    (18)
-#define TEST_LCD_DE_GPIO       (-1)
-#define TEST_LCD_PCLK_GPIO     (17)
-#define TEST_LCD_DATA0_GPIO    (42) // B0
-#define TEST_LCD_DATA1_GPIO    (41) // B1
-#define TEST_LCD_DATA2_GPIO    (40) // B2
-#define TEST_LCD_DATA3_GPIO    (39) // B3
-#define TEST_LCD_DATA4_GPIO    (38) // B4
-#define TEST_LCD_DATA5_GPIO    (4)  // G0
-#define TEST_LCD_DATA6_GPIO    (5)  // G1
-#define TEST_LCD_DATA7_GPIO    (6)  // G2
-#define TEST_LCD_DATA8_GPIO    (7)  // G3
-#define TEST_LCD_DATA9_GPIO    (15) // G4
-#define TEST_LCD_DATA10_GPIO   (16) // G5
-#define TEST_LCD_DATA11_GPIO   (37) // R0
-#define TEST_LCD_DATA12_GPIO   (36) // R1
-#define TEST_LCD_DATA13_GPIO   (35) // R2
-#define TEST_LCD_DATA14_GPIO   (34) // R3
-#define TEST_LCD_DATA15_GPIO   (33) // R4
-#define TEST_LCD_DISP_EN_GPIO  (-1)
+
+#define TEST_LCD_VSYNC_GPIO    (48)
+#define TEST_LCD_HSYNC_GPIO    (47)
+#define TEST_LCD_DE_GPIO       (45)
+#define TEST_LCD_PCLK_GPIO     (21)
+#define TEST_LCD_DATA0_GPIO    (3)  // B0
+#define TEST_LCD_DATA1_GPIO    (4)  // B1
+#define TEST_LCD_DATA2_GPIO    (5)  // B2
+#define TEST_LCD_DATA3_GPIO    (6)  // B3
+#define TEST_LCD_DATA4_GPIO    (7)  // B4
+#define TEST_LCD_DATA5_GPIO    (8)  // G0
+#define TEST_LCD_DATA6_GPIO    (9)  // G1
+#define TEST_LCD_DATA7_GPIO    (10) // G2
+#define TEST_LCD_DATA8_GPIO    (11) // G3
+#define TEST_LCD_DATA9_GPIO    (12) // G4
+#define TEST_LCD_DATA10_GPIO   (13) // G5
+#define TEST_LCD_DATA11_GPIO   (14) // R0
+#define TEST_LCD_DATA12_GPIO   (15) // R1
+#define TEST_LCD_DATA13_GPIO   (16) // R2
+#define TEST_LCD_DATA14_GPIO   (17) // R3
+#define TEST_LCD_DATA15_GPIO   (18) // R4
+#define TEST_LCD_DISP_EN_GPIO  (39)
 
 #if SOC_LCD_RGB_SUPPORTED
+// RGB driver consumes a huge memory to save frame buffer, only test it with PSRAM enabled
+#if CONFIG_SPIRAM_USE_MALLOC
 TEST_CASE("lcd rgb lcd panel", "[lcd]")
 {
 #define TEST_IMG_SIZE (100 * 100 * sizeof(uint16_t))
@@ -64,7 +67,7 @@ TEST_CASE("lcd rgb lcd panel", "[lcd]")
             TEST_LCD_DATA15_GPIO,
         },
         .timings = {
-            .pclk_hz = 20000000,
+            .pclk_hz = 12000000,
             .h_res = TEST_LCD_H_RES,
             .v_res = TEST_LCD_V_RES,
             .hsync_back_porch = 43,
@@ -74,6 +77,7 @@ TEST_CASE("lcd rgb lcd panel", "[lcd]")
             .vsync_front_porch = 1,
             .vsync_pulse_width = 1,
         },
+        .flags.fb_in_psram = 1,
     };
     // Test stream mode and one-off mode
     for (int i = 0; i < 2; i++) {
@@ -101,9 +105,9 @@ TEST_CASE("lcd rgb lcd panel", "[lcd]")
 #if CONFIG_LV_USE_USER_DATA
 #include "test_lvgl_port.h"
 
-static bool notify_lvgl_ready_to_flush(esp_lcd_panel_handle_t panel, void *user_data)
+static bool notify_lvgl_ready_to_flush(esp_lcd_panel_handle_t panel, esp_lcd_rgb_panel_event_data_t *edata, void *user_ctx)
 {
-    lv_disp_t *disp = *(lv_disp_t **)user_data;
+    lv_disp_t *disp = *(lv_disp_t **)user_ctx;
     lv_disp_flush_ready(&disp->driver);
     return false;
 }
@@ -141,7 +145,7 @@ TEST_CASE("lvgl gui with rgb interface", "[lcd][lvgl][ignore]")
             TEST_LCD_DATA15_GPIO,
         },
         .timings = {
-            .pclk_hz = 20000000,
+            .pclk_hz = 6000000,
             .h_res = TEST_LCD_H_RES,
             .v_res = TEST_LCD_V_RES,
             .hsync_back_porch = 43,
@@ -151,8 +155,9 @@ TEST_CASE("lvgl gui with rgb interface", "[lcd][lvgl][ignore]")
             .vsync_front_porch = 1,
             .vsync_pulse_width = 1,
         },
+        .flags.fb_in_psram = 1,
         .on_frame_trans_done = notify_lvgl_ready_to_flush,
-        .user_data = &disp,
+        .user_ctx = &disp,
     };
     TEST_ESP_OK(esp_lcd_new_rgb_panel(&panel_config, &panel_handle));
     TEST_ESP_OK(esp_lcd_panel_reset(panel_handle));
@@ -161,4 +166,5 @@ TEST_CASE("lvgl gui with rgb interface", "[lcd][lvgl][ignore]")
     test_lvgl_task_loop(panel_handle, TEST_LCD_H_RES, TEST_LCD_V_RES, &disp);
 }
 #endif // CONFIG_LV_USE_USER_DATA
+#endif // CONFIG_SPIRAM_USE_MALLOC
 #endif // SOC_LCD_RGB_SUPPORTED

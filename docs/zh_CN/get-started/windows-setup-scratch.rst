@@ -8,9 +8,6 @@
 
 使用 ESP-IDF 工具安装器对工具链及其他工具进行快速标准设置，请参照 :doc:`windows-setup`。
 
-.. note::
-    基于 GNU Make 的构建系统要求 Windows 兼容 MSYS2_ Unix，基于 CMake 的构建系统则无此要求。
-
 .. _get-esp-idf-windows-command-line:
 
 获取 ESP-IDF
@@ -54,7 +51,7 @@ Ninja 编译工具
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. 注解::
-    目前，Ninja 仅提供支持 64 位 Windows 版本的 bin 文件。您也可以配合其他编译工具（如 mingw-make）在 32 位 Windows 版本中使用 CMake 和 ``idf.py`` 。但是目前暂无关于此工具的说明文档。
+    目前，Ninja 仅提供支持 64 位 Windows 版本的 bin 文件。
 
 请从 `下载页面 <ninja-dl_>`_ 下载最新发布的 Windows 平台稳定版 Ninja_。
 
@@ -72,7 +69,6 @@ Python 安装完成后，从 Windows 开始菜单中打开“命令提示符”�
 
     pip install --user pyserial
 
-
 工具链设置
 ===============
 
@@ -85,9 +81,6 @@ Python 安装完成后，从 Windows 开始菜单中打开“命令提示符”�
 将压缩包文件解压到 ``C:\Program Files``（或其他位置）。压缩包文件包含一个 ``{IDF_TARGET_TOOLCHAIN_PREFIX}`` 目录。
 
 然后，请将该目录下的 ``bin`` 子目录 :ref:`添加到 Path 环境变量 <add-directory-windows-path>`。例如，将目录 ``C:\Program Files\{IDF_TARGET_TOOLCHAIN_PREFIX}\bin`` 添加到 Path 环境变量。
-
-.. 注解::
-    如果您已安装 MSYS2 环境（适用 "GNU Make" 编译系统），则可以跳过下载那一步，直接添加目录 ``C:\msys32\opt\{IDF_TARGET_TOOLCHAIN_PREFIX}\bin`` 到 Path 环境变量，因为 MSYS2 环境已包含工具链。
 
 
 .. _add-directory-windows-path:
@@ -111,7 +104,6 @@ Python 安装完成后，从 Windows 开始菜单中打开“命令提示符”�
 .. _Ninja: https://ninja-build.org/
 .. _ninja-dl: https://github.com/ninja-build/ninja/releases
 .. _Python: https://www.python.org/downloads/windows/
-.. _MSYS2: https://www.msys2.org/
 .. _kconfig-frontends releases page: https://github.com/espressif/kconfig-frontends/releases
 .. Note: These two targets may be used from git-clone-notes.inc depending on version, don't remove
 .. _Stable version: https://docs.espressif.com/projects/esp-idf/zh_CN/stable/

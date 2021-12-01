@@ -12,7 +12,7 @@ The bundle comes with the complete list of root certificates from Mozilla’s NS
 
 When generating the bundle you may choose between:
 
- * The full root certificate bundle from Mozilla, containing more than 130 certificates. The current bundle was updated Wed Jan 23 04:12:09 2019 GMT.
+ * The full root certificate bundle from Mozilla, containing more than 130 certificates. The current bundle was updated Tue Oct  5 09:35:35 2021 GMT.
  * A pre-selected filter list of the name of the most commonly used root certificates, reducing the amount of certificates to around 35 while still having around 90 % coverage according to market share statistics.
 
 In addition it is possible to specify a path to a certificate file or a directory containing certificates which then will be added to the generated bundle.
@@ -22,7 +22,7 @@ In addition it is possible to specify a path to a certificate file or a director
 Configuration
 -------------
 
-Most configuration is done through menuconfig. Make and CMake will generate the bundle according to the configuration and embed it.
+Most configuration is done through menuconfig. CMake will generate the bundle according to the configuration and embed it.
 
  * :ref:`CONFIG_MBEDTLS_CERTIFICATE_BUNDLE`: automatically build and attach the bundle.
  * :ref:`CONFIG_MBEDTLS_DEFAULT_CERTIFICATE_BUNDLE`: decide which certificates to include from the complete root list.

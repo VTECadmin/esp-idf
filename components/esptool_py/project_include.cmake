@@ -6,9 +6,12 @@ idf_build_get_property(python PYTHON)
 idf_build_get_property(idf_path IDF_PATH)
 
 set(chip_model ${target})
-if(target STREQUAL "esp32s3")
-    if(CONFIG_IDF_TARGET_ESP32S3_BETA_VERSION_3)
-        set(chip_model "esp32s3beta3")
+# TODO: remove this if block when esp32h2 beta1 is no longer supported
+if(target STREQUAL "esp32h2")
+    if(CONFIG_IDF_TARGET_ESP32H2_BETA_VERSION_1)
+        set(chip_model esp32h2beta1)
+    elseif(CONFIG_IDF_TARGET_ESP32H2_BETA_VERSION_2)
+        set(chip_model esp32h2beta2)
     endif()
 endif()
 
@@ -20,6 +23,8 @@ set(ESPMONITOR ${python} "${idf_path}/tools/idf_monitor.py")
 set(ESPFLASHMODE ${CONFIG_ESPTOOLPY_FLASHMODE})
 set(ESPFLASHFREQ ${CONFIG_ESPTOOLPY_FLASHFREQ})
 set(ESPFLASHSIZE ${CONFIG_ESPTOOLPY_FLASHSIZE})
+
+set(ESPTOOLPY_CHIP "${chip_model}")
 
 set(ESPTOOLPY_FLASH_OPTIONS
     --flash_mode ${ESPFLASHMODE}

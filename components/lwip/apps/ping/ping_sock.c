@@ -1,16 +1,8 @@
-// Copyright 2019 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2019-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <stdlib.h>
 #include <stdbool.h>
@@ -214,7 +206,7 @@ static void esp_ping_thread(void *args)
 
 esp_err_t esp_ping_new_session(const esp_ping_config_t *config, const esp_ping_callbacks_t *cbs, esp_ping_handle_t *hdl_out)
 {
-    esp_err_t ret = ESP_OK;
+    esp_err_t ret = ESP_FAIL;
     esp_ping_t *ep = NULL;
     PING_CHECK(config, "ping config can't be null", err, ESP_ERR_INVALID_ARG);
     PING_CHECK(hdl_out, "ping handle can't be null", err, ESP_ERR_INVALID_ARG);
@@ -267,15 +259,17 @@ esp_err_t esp_ping_new_session(const esp_ping_config_t *config, const esp_ping_c
         ep->sock = socket(AF_INET6, SOCK_RAW, IP6_NEXTH_ICMP6);
     }
 #endif
-    PING_CHECK(ep->sock > 0, "create socket failed: %d", err, ESP_FAIL, ep->sock);
+    PING_CHECK(ep->sock >= 0, "create socket failed: %d", err, ESP_FAIL, ep->sock);
     /* set if index */
     if(config->interface) {
         struct ifreq iface;
         if(netif_index_to_name(config->interface, iface.ifr_name) == NULL) {
-          goto err;
+            ESP_LOGE(TAG, "fail to find interface name with netif index %d", config->interface);
+            goto err;
         }
-        if(setsockopt(ep->sock, SOL_SOCKET, SO_BINDTODEVICE, &iface, sizeof(iface) !=0)) {
-          goto err;
+        if(setsockopt(ep->sock, SOL_SOCKET, SO_BINDTODEVICE, &iface, sizeof(iface)) != 0) {
+            ESP_LOGE(TAG, "fail to setsockopt SO_BINDTODEVICE");
+            goto err;
         }
     }
     struct timeval timeout;

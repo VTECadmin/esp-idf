@@ -20,7 +20,7 @@
 #include "esp_wifi_types.h"
 #include "utils/common.h"
 #include "common/ieee802_11_defs.h"
-#include "../src/esp_supplicant/esp_wifi_driver.h"
+#include "../esp_supplicant/src/esp_wifi_driver.h"
 #include "esp_log.h"
 #include "test_utils.h"
 #include "freertos/event_groups.h"
@@ -32,7 +32,8 @@
 
 #define TEST_LISTEN_CHANNEL     6
 
-#if !TEMPORARY_DISABLED_FOR_TARGETS(ESP32S2, ESP32C3)
+/* No runners */
+#if !TEMPORARY_DISABLED_FOR_TARGETS(ESP32S2, ESP32S3, ESP32C3)
 
 static const char *TAG = "test_offchan";
 esp_netif_t *wifi_netif;
@@ -242,4 +243,4 @@ static void test_wifi_roc(void)
 
 TEST_CASE_MULTIPLE_DEVICES("test ROC and Offchannel Action Frame Tx", "[Offchan][test_env=UT_T2_1][timeout=90]", test_wifi_roc, test_wifi_offchan_tx);
 
-#endif //!TEMPORARY_DISABLED_FOR_TARGETS(ESP32S2, ESP32C3)
+#endif //!TEMPORARY_DISABLED_FOR_TARGETS(ESP32S2, ESP32S3, ESP32C3)

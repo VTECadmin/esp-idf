@@ -77,8 +77,11 @@ static esp_err_t _http_handle_response_code(esp_http_client_handle_t http_client
     } else if(status_code == HttpStatus_NotFound || status_code == HttpStatus_Forbidden) {
         ESP_LOGE(TAG, "File not found(%d)", status_code);
         return ESP_FAIL;
-    } else if (status_code == HttpStatus_InternalError) {
-        ESP_LOGE(TAG, "Server error occurred(%d)", status_code);
+    } else if (status_code >= HttpStatus_BadRequest && status_code < HttpStatus_InternalError) {
+        ESP_LOGE(TAG, "Client error (%d)", status_code);
+        return ESP_FAIL;
+    } else if (status_code >= HttpStatus_InternalError) {
+        ESP_LOGE(TAG, "Server error (%d)", status_code);
         return ESP_FAIL;
     }
 
@@ -387,10 +390,11 @@ esp_err_t esp_https_ota_perform(esp_https_ota_handle_t https_ota_handle)
                 } else if (!is_recv_complete) {
                     return ESP_ERR_HTTPS_OTA_IN_PROGRESS;
                 }
-                ESP_LOGI(TAG, "Connection closed");
+                ESP_LOGD(TAG, "Connection closed");
             } else if (data_read > 0) {
                 return _ota_write(handle, (const void *)handle->ota_upgrade_buf, data_read);
             } else {
+                ESP_LOGE(TAG, "data read %d, errno %d", data_read, errno);
                 return ESP_FAIL;
             }
             if (!handle->partial_http_download || (handle->partial_http_download && handle->image_length == handle->binary_file_len)) {
@@ -422,6 +426,7 @@ esp_err_t esp_https_ota_perform(esp_https_ota_handle_t https_ota_handle)
                 ESP_LOGE(TAG, "Failed to establish HTTP connection");
                 return ESP_FAIL;
             }
+            ESP_LOGD(TAG, "Connection start");
             return ESP_ERR_HTTPS_OTA_IN_PROGRESS;
         }
     }

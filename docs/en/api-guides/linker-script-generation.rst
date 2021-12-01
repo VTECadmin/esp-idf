@@ -45,18 +45,6 @@ Creating and Specifying a Linker Fragment File
 
 Before anything else, a linker fragment file needs to be created. A linker fragment file is simply a text file with a ``.lf`` extension upon which the desired placements will be written. After creating the file, it is then necessary to present it to the build system. The instructions for the build systems supported by ESP-IDF are as follows:
 
-Make
-""""
-
-In the component's ``component.mk`` file, set the variable ``COMPONENT_ADD_LDFRAGMENTS`` to the path of the created linker fragment file. The path can either be an absolute path or a relative path from the component directory.
-
-.. code-block:: make
-
-    COMPONENT_ADD_LDFRAGMENTS += my_linker_fragment_file.lf
-
-CMake
-"""""
-
 In the component's ``CMakeLists.txt`` file, specify argument ``LDFRAGMENTS`` in the ``idf_component_register`` call. The value of ``LDFRAGMENTS`` can either be an absolute path or a relative path from the component directory to the created linker fragment file.
 
 .. code-block:: cmake
@@ -619,4 +607,4 @@ Then the corresponding excerpt from the generated linker script will be as follo
 
     Rule generated from the default scheme entry 	``iram -> iram0_text``. Since the default scheme specifies an ``iram -> iram0_text`` entry, it too is placed wherever ``iram0_text`` is referenced by a marker. Since it is a rule generated from the default scheme, it comes first among all other rules collected under the same target name.
 
-    The linker script template currently used is :component_file:`{IDF_TARGET_PATH_NAME}/ld/{IDF_TARGET_PATH_NAME}.project.ld.in`, specified by the ``{IDF_TARGET_PATH_NAME}`` component; the generated output script is put under its build directory.
+    The linker script template currently used is :component_file:`esp_system/ld/{IDF_TARGET_PATH_NAME}/sections.ld.in`; the generated output script ``sections.ld`` is put under its build directory.

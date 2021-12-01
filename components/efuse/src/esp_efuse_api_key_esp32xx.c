@@ -1,16 +1,8 @@
-// Copyright 2017-2018 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2017-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include "esp_efuse.h"
 #include "esp_efuse_utility.h"
@@ -35,9 +27,13 @@ typedef struct {
 typedef struct {
     const esp_efuse_desc_t** revoke;
     const esp_efuse_desc_t** revoke_wr_dis;
+    const esp_efuse_purpose_t digest_purpose;
 } esp_efuse_revokes_t;
 
 const esp_efuse_keys_t s_table[EFUSE_BLK_KEY_MAX - EFUSE_BLK_KEY0] = {
+#if CONFIG_IDF_TARGET_ESP8684
+    {ESP_EFUSE_KEY0, NULL, ESP_EFUSE_RD_DIS_KEY0, ESP_EFUSE_WR_DIS_KEY0, NULL},
+#else
     {ESP_EFUSE_KEY0, ESP_EFUSE_KEY_PURPOSE_0, ESP_EFUSE_RD_DIS_KEY0, ESP_EFUSE_WR_DIS_KEY0, ESP_EFUSE_WR_DIS_KEY0_PURPOSE},
     {ESP_EFUSE_KEY1, ESP_EFUSE_KEY_PURPOSE_1, ESP_EFUSE_RD_DIS_KEY1, ESP_EFUSE_WR_DIS_KEY1, ESP_EFUSE_WR_DIS_KEY1_PURPOSE},
     {ESP_EFUSE_KEY2, ESP_EFUSE_KEY_PURPOSE_2, ESP_EFUSE_RD_DIS_KEY2, ESP_EFUSE_WR_DIS_KEY2, ESP_EFUSE_WR_DIS_KEY2_PURPOSE},
@@ -47,22 +43,16 @@ const esp_efuse_keys_t s_table[EFUSE_BLK_KEY_MAX - EFUSE_BLK_KEY0] = {
 #if 0
     {ESP_EFUSE_KEY6, ESP_EFUSE_KEY_PURPOSE_6, ESP_EFUSE_RD_DIS_KEY6, ESP_EFUSE_WR_DIS_KEY6, ESP_EFUSE_WR_DIS_KEY6_PURPOSE},
 #endif
+#endif //#if CONFIG_IDF_TARGET_ESP8684
 };
 
+#if SOC_SUPPORT_SECURE_BOOT_REVOKE_KEY
 const esp_efuse_revokes_t s_revoke_table[] = {
-    {ESP_EFUSE_SECURE_BOOT_KEY_REVOKE0, ESP_EFUSE_WR_DIS_SECURE_BOOT_KEY_REVOKE0},
-    {ESP_EFUSE_SECURE_BOOT_KEY_REVOKE1, ESP_EFUSE_WR_DIS_SECURE_BOOT_KEY_REVOKE1},
-    {ESP_EFUSE_SECURE_BOOT_KEY_REVOKE2, ESP_EFUSE_WR_DIS_SECURE_BOOT_KEY_REVOKE2},
+    {ESP_EFUSE_SECURE_BOOT_KEY_REVOKE0, ESP_EFUSE_WR_DIS_SECURE_BOOT_KEY_REVOKE0, ESP_EFUSE_KEY_PURPOSE_SECURE_BOOT_DIGEST0},
+    {ESP_EFUSE_SECURE_BOOT_KEY_REVOKE1, ESP_EFUSE_WR_DIS_SECURE_BOOT_KEY_REVOKE1, ESP_EFUSE_KEY_PURPOSE_SECURE_BOOT_DIGEST1},
+    {ESP_EFUSE_SECURE_BOOT_KEY_REVOKE2, ESP_EFUSE_WR_DIS_SECURE_BOOT_KEY_REVOKE2, ESP_EFUSE_KEY_PURPOSE_SECURE_BOOT_DIGEST2},
 };
-
-#define ESP_EFUSE_CHK(ret)       \
-    do                           \
-    {                            \
-        if( ( err = (ret) ) != ESP_OK ) \
-            goto err_exit;        \
-    } while( 0 )
-
-
+#endif
 bool esp_efuse_block_is_empty(esp_efuse_block_t block)
 {
     const unsigned blk_len_bit = 256;
@@ -86,6 +76,7 @@ bool esp_efuse_block_is_empty(esp_efuse_block_t block)
 // Sets a write protection for the whole block.
 esp_err_t esp_efuse_set_write_protect(esp_efuse_block_t blk)
 {
+#if !CONFIG_IDF_TARGET_ESP8684
     if (blk == EFUSE_BLK1) {
         return esp_efuse_write_field_cnt(ESP_EFUSE_WR_DIS_BLK1, 1);
     } else if (blk == EFUSE_BLK2) {
@@ -98,7 +89,8 @@ esp_err_t esp_efuse_set_write_protect(esp_efuse_block_t blk)
         unsigned idx = blk - EFUSE_BLK_KEY0;
         return esp_efuse_write_field_cnt(s_table[idx].key_wr_dis, 1);
     }
-    return ESP_ERR_NOT_SUPPORTED;
+#endif
+    return ESP_ERR_NOT_SUPPORTED; // IDF-3818
 }
 
 // read protect for blk.
@@ -107,9 +99,12 @@ esp_err_t esp_efuse_set_read_protect(esp_efuse_block_t blk)
     if (blk >= EFUSE_BLK_KEY0 && blk < EFUSE_BLK_KEY_MAX) {
         unsigned idx = blk - EFUSE_BLK_KEY0;
         return esp_efuse_write_field_cnt(s_table[idx].key_rd_dis, 1);
-    } else if (blk == EFUSE_BLK10) {
+    }
+#if !CONFIG_IDF_TARGET_ESP8684 // IDF-3818
+    else if (blk == EFUSE_BLK10) {
         return esp_efuse_write_field_cnt(ESP_EFUSE_RD_DIS_SYS_DATA_PART2, 1);
     }
+#endif
     return ESP_ERR_NOT_SUPPORTED;
 
 }
@@ -157,8 +152,7 @@ esp_err_t esp_efuse_set_key_dis_read(esp_efuse_block_t block)
         return ESP_ERR_INVALID_ARG;
     }
     unsigned idx = block - EFUSE_BLK_KEY0;
-    const uint8_t one = 1;
-    return esp_efuse_write_field_blob(s_table[idx].key_rd_dis, &one, 1);
+    return esp_efuse_write_field_bit(s_table[idx].key_rd_dis);
 }
 
 bool esp_efuse_get_key_dis_write(esp_efuse_block_t block)
@@ -174,10 +168,10 @@ esp_err_t esp_efuse_set_key_dis_write(esp_efuse_block_t block)
         return ESP_ERR_INVALID_ARG;
     }
     unsigned idx = block - EFUSE_BLK_KEY0;
-    const uint8_t one = 1;
-    return esp_efuse_write_field_blob(s_table[idx].key_wr_dis, &one, 1);
+    return esp_efuse_write_field_bit(s_table[idx].key_wr_dis);
 }
 
+#if !CONFIG_IDF_TARGET_ESP8684 // cause esp8684 efuse has no purpose region
 esp_efuse_purpose_t esp_efuse_get_key_purpose(esp_efuse_block_t block)
 {
     if (block < EFUSE_BLK_KEY0 || block >= EFUSE_BLK_KEY_MAX) {
@@ -200,6 +194,7 @@ esp_err_t esp_efuse_set_key_purpose(esp_efuse_block_t block, esp_efuse_purpose_t
     unsigned idx = block - EFUSE_BLK_KEY0;
     return esp_efuse_write_field_blob(s_table[idx].keypurpose, &purpose, s_table[idx].keypurpose[0]->bit_count);
 }
+#endif //CONFIG_IDF_TARGET_ESP8684
 
 bool esp_efuse_get_keypurpose_dis_write(esp_efuse_block_t block)
 {
@@ -214,8 +209,7 @@ esp_err_t esp_efuse_set_keypurpose_dis_write(esp_efuse_block_t block)
         return ESP_ERR_INVALID_ARG;
     }
     unsigned idx = block - EFUSE_BLK_KEY0;
-    const uint8_t one = 1;
-    return esp_efuse_write_field_blob(s_table[idx].keypurpose_wr_dis, &one, 1);
+    return esp_efuse_write_field_bit(s_table[idx].keypurpose_wr_dis);
 }
 
 bool esp_efuse_find_purpose(esp_efuse_purpose_t purpose, esp_efuse_block_t *block)
@@ -239,7 +233,7 @@ esp_efuse_block_t esp_efuse_find_unused_key_block(void)
 {
     for (esp_efuse_block_t b = EFUSE_BLK_KEY0; b < EFUSE_BLK_KEY_MAX; b++) {
         if (esp_efuse_key_block_unused(b)) {
-                return b;
+            return b;
         }
     }
     return EFUSE_BLK_KEY_MAX; // nothing
@@ -262,8 +256,11 @@ bool esp_efuse_key_block_unused(esp_efuse_block_t block)
         return false; // Not a key block
     }
 
-    if (esp_efuse_get_key_purpose(block) != ESP_EFUSE_KEY_PURPOSE_USER ||
+    if (
+#if !CONFIG_IDF_TARGET_ESP8684
+            esp_efuse_get_key_purpose(block) != ESP_EFUSE_KEY_PURPOSE_USER ||
             esp_efuse_get_keypurpose_dis_write(block) ||
+#endif
             esp_efuse_get_key_dis_read(block) ||
             esp_efuse_get_key_dis_write(block)) {
         return false; // Block in use!
@@ -276,40 +273,19 @@ bool esp_efuse_key_block_unused(esp_efuse_block_t block)
     return true; // Unused
 }
 
-bool esp_efuse_get_digest_revoke(unsigned num_digest)
-{
-    assert(num_digest < sizeof(s_revoke_table) / sizeof(esp_efuse_revokes_t));
-    return esp_efuse_read_field_bit(s_revoke_table[num_digest].revoke);
-}
-
-esp_err_t esp_efuse_set_digest_revoke(unsigned num_digest)
-{
-    if (num_digest >= sizeof(s_revoke_table) / sizeof(esp_efuse_revokes_t)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    return esp_efuse_write_field_bit(s_revoke_table[num_digest].revoke);
-}
-
-bool esp_efuse_get_write_protect_of_digest_revoke(unsigned num_digest)
-{
-    assert(num_digest < sizeof(s_revoke_table) / sizeof(esp_efuse_revokes_t));
-    return esp_efuse_read_field_bit(s_revoke_table[num_digest].revoke_wr_dis);
-}
-
-esp_err_t esp_efuse_set_write_protect_of_digest_revoke(unsigned num_digest)
-{
-    if (num_digest >= sizeof(s_revoke_table) / sizeof(esp_efuse_revokes_t)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    return esp_efuse_write_field_bit(s_revoke_table[num_digest].revoke_wr_dis);
-}
-
 esp_err_t esp_efuse_write_key(esp_efuse_block_t block, esp_efuse_purpose_t purpose, const void *key, size_t key_size_bytes)
 {
     esp_err_t err = ESP_OK;
+
+#if CONFIG_IDF_TARGET_ESP8684
+    if (block != EFUSE_BLK_KEY0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+#else
     if (block < EFUSE_BLK_KEY0 || block >= EFUSE_BLK_KEY_MAX || key_size_bytes > 32 || purpose >= ESP_EFUSE_KEY_PURPOSE_MAX) {
         return ESP_ERR_INVALID_ARG;
     }
+#endif
 
     esp_efuse_batch_write_begin();
 
@@ -319,9 +295,13 @@ esp_err_t esp_efuse_write_key(esp_efuse_block_t block, esp_efuse_purpose_t purpo
         unsigned idx = block - EFUSE_BLK_KEY0;
         ESP_EFUSE_CHK(esp_efuse_write_field_blob(s_table[idx].key, key, key_size_bytes * 8));
         ESP_EFUSE_CHK(esp_efuse_set_key_dis_write(block));
-        if (purpose == ESP_EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_1 ||
+
+#if !CONFIG_IDF_TARGET_ESP8684
+        if (purpose == ESP_EFUSE_KEY_PURPOSE_XTS_AES_128_KEY ||
+#ifdef SOC_FLASH_ENCRYPTION_XTS_AES_256
+            purpose == ESP_EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_1 ||
             purpose == ESP_EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_2 ||
-            purpose == ESP_EFUSE_KEY_PURPOSE_XTS_AES_128_KEY ||
+#endif //#ifdef SOC_EFUSE_SUPPORT_XTS_AES_256_KEYS
             purpose == ESP_EFUSE_KEY_PURPOSE_HMAC_DOWN_ALL ||
             purpose == ESP_EFUSE_KEY_PURPOSE_HMAC_DOWN_JTAG ||
             purpose == ESP_EFUSE_KEY_PURPOSE_HMAC_DOWN_DIGITAL_SIGNATURE ||
@@ -330,6 +310,7 @@ esp_err_t esp_efuse_write_key(esp_efuse_block_t block, esp_efuse_purpose_t purpo
         }
         ESP_EFUSE_CHK(esp_efuse_set_key_purpose(block, purpose));
         ESP_EFUSE_CHK(esp_efuse_set_keypurpose_dis_write(block));
+#endif //#if !CONFIG_IDF_TARGET_ESP8684
         return esp_efuse_batch_write_commit();
     }
 err_exit:
@@ -337,7 +318,7 @@ err_exit:
     return err;
 }
 
-esp_err_t esp_efuse_write_keys(esp_efuse_purpose_t purposes[], uint8_t keys[][32], unsigned number_of_keys)
+esp_err_t esp_efuse_write_keys(const esp_efuse_purpose_t purposes[], uint8_t keys[][32], unsigned number_of_keys)
 {
     esp_err_t err = ESP_OK;
     if (number_of_keys == 0 || number_of_keys > (EFUSE_BLK_KEY_MAX - EFUSE_BLK_KEY0) || keys == NULL || purposes == NULL) {
@@ -369,3 +350,68 @@ err_exit:
     esp_efuse_batch_write_cancel();
     return err;
 }
+
+
+#if SOC_SUPPORT_SECURE_BOOT_REVOKE_KEY
+bool esp_efuse_get_digest_revoke(unsigned num_digest)
+{
+    assert(num_digest < sizeof(s_revoke_table) / sizeof(esp_efuse_revokes_t));
+    return esp_efuse_read_field_bit(s_revoke_table[num_digest].revoke);
+}
+
+esp_err_t esp_efuse_set_digest_revoke(unsigned num_digest)
+{
+    if (num_digest >= sizeof(s_revoke_table) / sizeof(esp_efuse_revokes_t)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return esp_efuse_write_field_bit(s_revoke_table[num_digest].revoke);
+}
+
+bool esp_efuse_get_write_protect_of_digest_revoke(unsigned num_digest)
+{
+    assert(num_digest < sizeof(s_revoke_table) / sizeof(esp_efuse_revokes_t));
+    return esp_efuse_read_field_bit(s_revoke_table[num_digest].revoke_wr_dis);
+}
+
+esp_err_t esp_efuse_set_write_protect_of_digest_revoke(unsigned num_digest)
+{
+    if (num_digest >= sizeof(s_revoke_table) / sizeof(esp_efuse_revokes_t)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return esp_efuse_write_field_bit(s_revoke_table[num_digest].revoke_wr_dis);
+}
+
+esp_err_t esp_secure_boot_read_key_digests(ets_secure_boot_key_digests_t *trusted_keys)
+{
+    bool found = false;
+    esp_efuse_block_t key_block;
+
+    if (trusted_keys == NULL) {
+        return ESP_FAIL;
+    }
+
+    for (unsigned i = 0; i < MAX_KEY_DIGESTS; i++) {
+        trusted_keys->key_digests[i] = NULL;
+        if (esp_efuse_get_digest_revoke(i)) {
+            continue;
+        }
+
+        // Anti-FI check that this efuse really is not revoked
+        assert(esp_efuse_get_digest_revoke(i) == 0);
+
+        if (!esp_efuse_find_purpose(s_revoke_table[i].digest_purpose, &key_block)) {
+            continue;
+        }
+        trusted_keys->key_digests[i] = (const void *)esp_efuse_utility_get_read_register_address(key_block);
+        found = found || (trusted_keys->key_digests[i] != NULL);
+    }
+
+    trusted_keys->allow_key_revoke = false;
+
+    if (!found) {
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+#endif //#if SOC_SUPPORT_SECURE_BOOT_REVOKE_KEY

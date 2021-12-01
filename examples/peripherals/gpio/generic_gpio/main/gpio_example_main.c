@@ -59,7 +59,8 @@ static void gpio_task_example(void* arg)
 
 void app_main(void)
 {
-    gpio_config_t io_conf;
+    //zero-initialize the config structure.
+    gpio_config_t io_conf = {};
     //disable interrupt
     io_conf.intr_type = GPIO_INTR_DISABLE;
     //set as output mode
@@ -83,7 +84,7 @@ void app_main(void)
     io_conf.pull_up_en = 1;
     gpio_config(&io_conf);
 
-    //change gpio intrrupt type for one pin
+    //change gpio interrupt type for one pin
     gpio_set_intr_type(GPIO_INPUT_IO_0, GPIO_INTR_ANYEDGE);
 
     //create a queue to handle gpio event from isr

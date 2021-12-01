@@ -1,27 +1,23 @@
-// Copyright 2017-2020 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at",
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License
+/*
+ * SPDX-FileCopyrightText: 2017-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include "sdkconfig.h"
 #include "esp_efuse.h"
 #include <assert.h>
 #include "esp_efuse_table.h"
 
-// md5_digest_table 61baa79d296df996c838bc2adc1837e5
+// md5_digest_table ef33779021404fbaddc878eefebaddc1
 // This file was generated from the file esp_efuse_table.csv. DO NOT CHANGE THIS FILE MANUALLY.
 // If you want to change some fields, you need to change esp_efuse_table.csv file
 // then run `efuse_common_table` or `efuse_custom_table` command it will generate this file.
 // To show efuse_table run the command 'show_efuse_table'.
+
+static const esp_efuse_desc_t WR_DIS[] = {
+    {EFUSE_BLK0, 0, 32}, 	 // Write protection,
+};
 
 static const esp_efuse_desc_t WR_DIS_RD_DIS[] = {
     {EFUSE_BLK0, 0, 1}, 	 // Write protection for RD_DIS_KEY0 RD_DIS_KEY1 RD_DIS_KEY2 RD_DIS_KEY3 RD_DIS_KEY4 RD_DIS_KEY5 RD_DIS_SYS_DATA_PART2,
@@ -127,6 +123,10 @@ static const esp_efuse_desc_t WR_DIS_SYS_DATA_PART2[] = {
     {EFUSE_BLK0, 29, 1}, 	 // Write protection for EFUSE_BLK10. SYS_DATA_PART2,
 };
 
+static const esp_efuse_desc_t RD_DIS[] = {
+    {EFUSE_BLK0, 32, 7}, 	 // Read protection,
+};
+
 static const esp_efuse_desc_t RD_DIS_KEY0[] = {
     {EFUSE_BLK0, 32, 1}, 	 // Read protection for EFUSE_BLK4.  KEY0,
 };
@@ -153,10 +153,6 @@ static const esp_efuse_desc_t RD_DIS_KEY5[] = {
 
 static const esp_efuse_desc_t RD_DIS_SYS_DATA_PART2[] = {
     {EFUSE_BLK0, 38, 1}, 	 // Read protection for EFUSE_BLK10. SYS_DATA_PART2,
-};
-
-static const esp_efuse_desc_t DIS_RTC_RAM_BOOT[] = {
-    {EFUSE_BLK0, 39, 1}, 	 // Disable boot from RTC RAM,
 };
 
 static const esp_efuse_desc_t DIS_ICACHE[] = {
@@ -192,7 +188,7 @@ static const esp_efuse_desc_t JTAG_SEL_ENABLE[] = {
 };
 
 static const esp_efuse_desc_t SOFT_DIS_JTAG[] = {
-    {EFUSE_BLK0, 48, 2}, 	 // Set these bits to disable JTAG in the soft way (odd number 1 means disable). JTAG can be enabled in HMAC module.,
+    {EFUSE_BLK0, 48, 3}, 	 // Set these bits to disable JTAG in the soft way (odd number 1 means disable). JTAG can be enabled in HMAC module.,
 };
 
 static const esp_efuse_desc_t DIS_PAD_JTAG[] = {
@@ -456,6 +452,10 @@ static const esp_efuse_desc_t USER_DATA[] = {
     {EFUSE_BLK3, 0, 256}, 	 // User data,
 };
 
+static const esp_efuse_desc_t USER_DATA_MAC_CUSTOM[] = {
+    {EFUSE_BLK3, 200, 48}, 	 // Custom MAC,
+};
+
 static const esp_efuse_desc_t KEY0[] = {
     {EFUSE_BLK4, 0, 256}, 	 // Key0 or user data,
 };
@@ -511,6 +511,11 @@ static const esp_efuse_desc_t THRES_HVT[] = {
 
 
 
+
+const esp_efuse_desc_t* ESP_EFUSE_WR_DIS[] = {
+    &WR_DIS[0],    		// Write protection
+    NULL
+};
 
 const esp_efuse_desc_t* ESP_EFUSE_WR_DIS_RD_DIS[] = {
     &WR_DIS_RD_DIS[0],    		// Write protection for RD_DIS_KEY0 RD_DIS_KEY1 RD_DIS_KEY2 RD_DIS_KEY3 RD_DIS_KEY4 RD_DIS_KEY5 RD_DIS_SYS_DATA_PART2
@@ -642,6 +647,11 @@ const esp_efuse_desc_t* ESP_EFUSE_WR_DIS_SYS_DATA_PART2[] = {
     NULL
 };
 
+const esp_efuse_desc_t* ESP_EFUSE_RD_DIS[] = {
+    &RD_DIS[0],    		// Read protection
+    NULL
+};
+
 const esp_efuse_desc_t* ESP_EFUSE_RD_DIS_KEY0[] = {
     &RD_DIS_KEY0[0],    		// Read protection for EFUSE_BLK4.  KEY0
     NULL
@@ -674,11 +684,6 @@ const esp_efuse_desc_t* ESP_EFUSE_RD_DIS_KEY5[] = {
 
 const esp_efuse_desc_t* ESP_EFUSE_RD_DIS_SYS_DATA_PART2[] = {
     &RD_DIS_SYS_DATA_PART2[0],    		// Read protection for EFUSE_BLK10. SYS_DATA_PART2
-    NULL
-};
-
-const esp_efuse_desc_t* ESP_EFUSE_DIS_RTC_RAM_BOOT[] = {
-    &DIS_RTC_RAM_BOOT[0],    		// Disable boot from RTC RAM
     NULL
 };
 
@@ -1049,6 +1054,11 @@ const esp_efuse_desc_t* ESP_EFUSE_ADC1_CAL_VOL_ATTEN3[] = {
 
 const esp_efuse_desc_t* ESP_EFUSE_USER_DATA[] = {
     &USER_DATA[0],    		// User data
+    NULL
+};
+
+const esp_efuse_desc_t* ESP_EFUSE_USER_DATA_MAC_CUSTOM[] = {
+    &USER_DATA_MAC_CUSTOM[0],    		// Custom MAC
     NULL
 };
 

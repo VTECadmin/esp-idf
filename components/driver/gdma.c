@@ -1,21 +1,14 @@
-// Copyright 2020 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2020-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 // #define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
 
 #include <stdlib.h>
 #include <sys/cdefs.h>
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "soc/soc_caps.h"
@@ -23,13 +16,29 @@
 #include "esp_intr_alloc.h"
 #include "esp_log.h"
 #include "esp_check.h"
-#include "driver/periph_ctrl.h"
-#include "esp_private/gdma.h"
+#include "esp_heap_caps.h"
 #include "hal/gdma_hal.h"
 #include "hal/gdma_ll.h"
 #include "soc/gdma_periph.h"
+#include "soc/soc_memory_types.h"
+#include "esp_private/periph_ctrl.h"
+#include "esp_private/gdma.h"
 
 static const char *TAG = "gdma";
+
+#if CONFIG_GDMA_ISR_IRAM_SAFE
+#define GDMA_INTR_ALLOC_FLAGS  (ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_INTRDISABLED)
+#define GDMA_MEM_ALLOC_CAPS    (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+#else
+#define GDMA_INTR_ALLOC_FLAGS  ESP_INTR_FLAG_INTRDISABLED
+#define GDMA_MEM_ALLOC_CAPS    MALLOC_CAP_DEFAULT
+#endif  // CONFIG_GDMA_ISR_IRAM_SAFE
+
+#if CONFIG_GDMA_CTRL_FUNC_IN_IRAM
+#define GDMA_CTRL_FUNC_ATTR    IRAM_ATTR
+#else
+#define GDMA_CTRL_FUNC_ATTR
+#endif // CONFIG_GDMA_CTRL_FUNC_IN_IRAM
 
 #define GDMA_INVALID_PERIPH_TRIG  (0x3F)
 #define SEARCH_REQUEST_RX_CHANNEL (1 << 0)
@@ -82,6 +91,8 @@ struct gdma_channel_t {
     intr_handle_t intr; // per-channel interrupt handle
     gdma_channel_direction_t direction; // channel direction
     int periph_id; // Peripheral instance ID, indicates which peripheral is connected to this GDMA channel
+    size_t sram_alignment;  // alignment for memory in SRAM
+    size_t psram_alignment; // alignment for memory in PSRAM
     esp_err_t (*del)(gdma_channel_t *channel); // channel deletion function, it's polymorphic, see `gdma_del_tx_channel` or `gdma_del_rx_channel`
 };
 
@@ -129,11 +140,11 @@ esp_err_t gdma_new_channel(const gdma_channel_alloc_config_t *config, gdma_chann
     }
     if (config->direction == GDMA_CHANNEL_DIRECTION_TX) {
         search_code |= SEARCH_REQUEST_TX_CHANNEL; // search TX only
-        alloc_tx_channel = calloc(1, sizeof(gdma_tx_channel_t));
+        alloc_tx_channel = heap_caps_calloc(1, sizeof(gdma_tx_channel_t), GDMA_MEM_ALLOC_CAPS);
         ESP_GOTO_ON_FALSE(alloc_tx_channel, ESP_ERR_NO_MEM, err, TAG, "no mem for gdma tx channel");
     } else if (config->direction == GDMA_CHANNEL_DIRECTION_RX) {
         search_code |= SEARCH_REQUEST_RX_CHANNEL; // search RX only
-        alloc_rx_channel = calloc(1, sizeof(gdma_rx_channel_t));
+        alloc_rx_channel = heap_caps_calloc(1, sizeof(gdma_rx_channel_t), GDMA_MEM_ALLOC_CAPS);
         ESP_GOTO_ON_FALSE(alloc_rx_channel, ESP_ERR_NO_MEM, err, TAG, "no mem for gdma rx channel");
     }
 
@@ -279,6 +290,67 @@ err:
     return ret;
 }
 
+esp_err_t gdma_set_transfer_ability(gdma_channel_handle_t dma_chan, const gdma_transfer_ability_t *ability)
+{
+    esp_err_t ret = ESP_OK;
+    gdma_pair_t *pair = NULL;
+    gdma_group_t *group = NULL;
+    bool en_burst = true;
+    ESP_GOTO_ON_FALSE(dma_chan, ESP_ERR_INVALID_ARG, err, TAG, "invalid argument");
+    pair = dma_chan->pair;
+    group = pair->group;
+    size_t sram_alignment = ability->sram_trans_align;
+    size_t psram_alignment = ability->psram_trans_align;
+    // alignment should be 2^n
+    ESP_GOTO_ON_FALSE((sram_alignment & (sram_alignment - 1)) == 0, ESP_ERR_INVALID_ARG, err, TAG, "invalid sram alignment: %zu", sram_alignment);
+
+#if SOC_GDMA_SUPPORT_PSRAM
+    int block_size_index = 0;
+    switch (psram_alignment) {
+    case 64: // 64 Bytes alignment
+        block_size_index = GDMA_LL_EXT_MEM_BK_SIZE_64B;
+        break;
+    case 32: // 32 Bytes alignment
+        block_size_index = GDMA_LL_EXT_MEM_BK_SIZE_32B;
+        break;
+    case 16: // 16 Bytes alignment
+        block_size_index = GDMA_LL_EXT_MEM_BK_SIZE_16B;
+        break;
+    case 0: // no alignment is requirement
+        block_size_index = GDMA_LL_EXT_MEM_BK_SIZE_16B;
+        psram_alignment = SOC_GDMA_PSRAM_MIN_ALIGN; // fall back to minimal alignment
+        break;
+    default:
+        ESP_GOTO_ON_FALSE(false, ESP_ERR_INVALID_ARG, err, TAG, "invalid psram alignment: %zu", psram_alignment);
+        break;
+    }
+#endif // #if SOC_GDMA_SUPPORT_PSRAM
+
+    if (dma_chan->direction == GDMA_CHANNEL_DIRECTION_TX) {
+        // TX channel can always enable burst mode, no matter data alignment
+        gdma_ll_tx_enable_data_burst(group->hal.dev, pair->pair_id, true);
+        gdma_ll_tx_enable_descriptor_burst(group->hal.dev, pair->pair_id, true);
+#if SOC_GDMA_SUPPORT_PSRAM
+        gdma_ll_tx_set_block_size_psram(group->hal.dev, pair->pair_id, block_size_index);
+#endif // #if SOC_GDMA_SUPPORT_PSRAM
+    } else {
+        // RX channel burst mode depends on specific data alignment
+        en_burst = sram_alignment >= 4;
+        gdma_ll_rx_enable_data_burst(group->hal.dev, pair->pair_id, en_burst);
+        gdma_ll_rx_enable_descriptor_burst(group->hal.dev, pair->pair_id, en_burst);
+#if SOC_GDMA_SUPPORT_PSRAM
+        gdma_ll_rx_set_block_size_psram(group->hal.dev, pair->pair_id, block_size_index);
+#endif // #if SOC_GDMA_SUPPORT_PSRAM
+    }
+
+    dma_chan->sram_alignment = sram_alignment;
+    dma_chan->psram_alignment = psram_alignment;
+    ESP_LOGD(TAG, "%s channel (%d,%d), (%zu:%zu) bytes aligned, burst %s", dma_chan->direction == GDMA_CHANNEL_DIRECTION_TX ? "tx" : "rx",
+             group->group_id, pair->pair_id, sram_alignment, psram_alignment, en_burst ? "enabled" : "disabled");
+err:
+    return ret;
+}
+
 esp_err_t gdma_apply_strategy(gdma_channel_handle_t dma_chan, const gdma_strategy_config_t *config)
 {
     esp_err_t ret = ESP_OK;
@@ -309,6 +381,17 @@ esp_err_t gdma_register_tx_event_callbacks(gdma_channel_handle_t dma_chan, gdma_
     group = pair->group;
     gdma_tx_channel_t *tx_chan = __containerof(dma_chan, gdma_tx_channel_t, base);
 
+#if CONFIG_GDMA_ISR_IRAM_SAFE
+    if (cbs->on_trans_eof) {
+        ESP_GOTO_ON_FALSE(esp_ptr_in_iram(cbs->on_trans_eof), ESP_ERR_INVALID_ARG, err, TAG, "on_trans_eof not in IRAM");
+    }
+    if (user_data) {
+        ESP_GOTO_ON_FALSE(esp_ptr_in_dram(user_data) ||
+                          esp_ptr_in_diram_dram(user_data) ||
+                          esp_ptr_in_rtc_dram_fast(user_data), ESP_ERR_INVALID_ARG, err, TAG, "user context not in DRAM");
+    }
+#endif // CONFIG_GDMA_ISR_IRAM_SAFE
+
     // lazy install interrupt service
     ESP_GOTO_ON_ERROR(gdma_install_tx_interrupt(tx_chan), err, TAG, "install interrupt service failed");
 
@@ -336,6 +419,17 @@ esp_err_t gdma_register_rx_event_callbacks(gdma_channel_handle_t dma_chan, gdma_
     group = pair->group;
     gdma_rx_channel_t *rx_chan = __containerof(dma_chan, gdma_rx_channel_t, base);
 
+#if CONFIG_GDMA_ISR_IRAM_SAFE
+    if (cbs->on_recv_eof) {
+        ESP_GOTO_ON_FALSE(esp_ptr_in_iram(cbs->on_recv_eof), ESP_ERR_INVALID_ARG, err, TAG, "on_recv_eof not in IRAM");
+    }
+    if (user_data) {
+        ESP_GOTO_ON_FALSE(esp_ptr_in_dram(user_data) ||
+                          esp_ptr_in_diram_dram(user_data) ||
+                          esp_ptr_in_rtc_dram_fast(user_data), ESP_ERR_INVALID_ARG, err, TAG, "user context not in DRAM");
+    }
+#endif // CONFIG_GDMA_ISR_IRAM_SAFE
+
     // lazy install interrupt service
     ESP_GOTO_ON_ERROR(gdma_install_rx_interrupt(rx_chan), err, TAG, "install interrupt service failed");
 
@@ -353,7 +447,7 @@ err:
     return ret;
 }
 
-esp_err_t gdma_start(gdma_channel_handle_t dma_chan, intptr_t desc_base_addr)
+GDMA_CTRL_FUNC_ATTR esp_err_t gdma_start(gdma_channel_handle_t dma_chan, intptr_t desc_base_addr)
 {
     esp_err_t ret = ESP_OK;
     gdma_pair_t *pair = NULL;
@@ -374,7 +468,7 @@ err:
     return ret;
 }
 
-esp_err_t gdma_stop(gdma_channel_handle_t dma_chan)
+GDMA_CTRL_FUNC_ATTR esp_err_t gdma_stop(gdma_channel_handle_t dma_chan)
 {
     esp_err_t ret = ESP_OK;
     gdma_pair_t *pair = NULL;
@@ -393,7 +487,7 @@ err:
     return ret;
 }
 
-esp_err_t gdma_append(gdma_channel_handle_t dma_chan)
+GDMA_CTRL_FUNC_ATTR esp_err_t gdma_append(gdma_channel_handle_t dma_chan)
 {
     esp_err_t ret = ESP_OK;
     gdma_pair_t *pair = NULL;
@@ -412,7 +506,7 @@ err:
     return ret;
 }
 
-esp_err_t gdma_reset(gdma_channel_handle_t dma_chan)
+GDMA_CTRL_FUNC_ATTR esp_err_t gdma_reset(gdma_channel_handle_t dma_chan)
 {
     esp_err_t ret = ESP_OK;
     gdma_pair_t *pair = NULL;
@@ -457,7 +551,7 @@ static gdma_group_t *gdma_acquire_group_handle(int group_id)
 {
     bool new_group = false;
     gdma_group_t *group = NULL;
-    gdma_group_t *pre_alloc_group = calloc(1, sizeof(gdma_group_t));
+    gdma_group_t *pre_alloc_group = heap_caps_calloc(1, sizeof(gdma_group_t), GDMA_MEM_ALLOC_CAPS);
     if (!pre_alloc_group) {
         goto out;
     }
@@ -521,7 +615,7 @@ static gdma_pair_t *gdma_acquire_pair_handle(gdma_group_t *group, int pair_id)
 {
     bool new_pair = false;
     gdma_pair_t *pair = NULL;
-    gdma_pair_t *pre_alloc_pair = calloc(1, sizeof(gdma_pair_t));
+    gdma_pair_t *pre_alloc_pair = heap_caps_calloc(1, sizeof(gdma_pair_t), GDMA_MEM_ALLOC_CAPS);
     if (!pre_alloc_pair) {
         goto out;
     }
@@ -669,7 +763,7 @@ static esp_err_t gdma_install_rx_interrupt(gdma_rx_channel_t *rx_chan)
     gdma_pair_t *pair = rx_chan->base.pair;
     gdma_group_t *group = pair->group;
     // pre-alloc a interrupt handle, with handler disabled
-    int isr_flags = ESP_INTR_FLAG_INTRDISABLED;
+    int isr_flags = GDMA_INTR_ALLOC_FLAGS;
 #if SOC_GDMA_TX_RX_SHARE_INTERRUPT
     isr_flags |= ESP_INTR_FLAG_SHARED;
 #endif
@@ -696,7 +790,7 @@ static esp_err_t gdma_install_tx_interrupt(gdma_tx_channel_t *tx_chan)
     gdma_pair_t *pair = tx_chan->base.pair;
     gdma_group_t *group = pair->group;
     // pre-alloc a interrupt handle, with handler disabled
-    int isr_flags = ESP_INTR_FLAG_INTRDISABLED;
+    int isr_flags = GDMA_INTR_ALLOC_FLAGS;
 #if SOC_GDMA_TX_RX_SHARE_INTERRUPT
     isr_flags |= ESP_INTR_FLAG_SHARED;
 #endif

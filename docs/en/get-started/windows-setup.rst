@@ -4,11 +4,6 @@ Standard Setup of Toolchain for Windows
 
 :link_to_translation:`zh_CN:[中文]`
 
-.. only:: esp32
-
-    .. note::
-        Currently only 64-bit versions of Windows are supported. 32-bit Windows can use the :doc:`Legacy GNU Make Build System<../get-started-legacy/windows-setup>`.
-
 Introduction
 ============
 
@@ -16,15 +11,12 @@ ESP-IDF requires some prerequisite tools to be installed so you can build firmwa
 
 For this Getting Started we're going to use the Command Prompt, but after ESP-IDF is installed you can use :doc:`Eclipse <eclipse-setup>` or another graphical IDE with CMake support instead.
 
-.. only:: esp32
-
-    .. note::
-        Previous versions of ESP-IDF used the :doc:`Legacy GNU Make Build System<../get-started-legacy/windows-setup>` and MSYS2_ Unix compatibility environment. This is no longer required, ESP-IDF can be used from the Windows Command Prompt.
-
 .. note::
-    Limitation: the installation path of Python or ESP-IDF must not contain white spaces or parentheses.
-
-    Limitation: the installation path of Python or ESP-IDF should not contain special characters (non-ASCII) unless the operating system is configured with "Unicode UTF-8" support.
+    Limitations: 
+    - The installation path of ESP-IDF and ESP-IDF Tools must not be longer than 90 characters. Too long installation paths might result in a failed build.
+    - The installation path of Python or ESP-IDF must not contain white spaces or parentheses.
+    - The installation path of Python or ESP-IDF should not contain special characters (non-ASCII) unless the operating system is configured with "Unicode UTF-8" support.
+    
     System Administrator can enable the support via Control Panel - Change date, time, or number formats - Administrative tab - Change system locale - check the option "Beta: Use Unicode UTF-8 for worldwide language support" - Ok and reboot the computer.
 
 .. _get-started-windows-tools-installer:
@@ -39,7 +31,7 @@ What is the usecase for Online and Offline Installer
 
 Online Installer is very small and allows the installation of all available releases of ESP-IDF. The installer will download only necessary dependencies including `Git For Windows`_  during the installation process. The installer stores downloaded files in the cache directory ``%userprofile%\.espressif``
 
-Offline Installer does not require any network connection. The installer contains all required dependencies including `Git For Windows`_ . The installer allows the installation of ESP-IDF with the following tags: v4.2, v4.1.1.
+Offline Installer does not require any network connection. The installer contains all required dependencies including `Git For Windows`_ .
 
 Components of the installation
 ------------------------------
@@ -120,7 +112,6 @@ For advanced users who want to customize the install process:
     windows-setup-update
 
 
-.. _MSYS2: https://www.msys2.org/
 .. _CMake: https://cmake.org/download/
 .. _Ninja: https://ninja-build.org/
 .. _Python: https://www.python.org/downloads/windows/

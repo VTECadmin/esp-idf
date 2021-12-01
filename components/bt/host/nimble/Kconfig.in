@@ -44,8 +44,6 @@ choice BT_NIMBLE_LOG_LEVEL
 
     config BT_NIMBLE_LOG_LEVEL_NONE
         bool "No logs"
-    config BT_NIMBLE_LOG_LEVEL_CRIT
-        bool "Critical logs"
     config BT_NIMBLE_LOG_LEVEL_ERROR
         bool "Error logs"
     config BT_NIMBLE_LOG_LEVEL_WARNING
@@ -62,8 +60,7 @@ config BT_NIMBLE_LOG_LEVEL
     default 1 if BT_NIMBLE_LOG_LEVEL_INFO
     default 2 if BT_NIMBLE_LOG_LEVEL_WARNING
     default 3 if BT_NIMBLE_LOG_LEVEL_ERROR
-    default 4 if BT_NIMBLE_LOG_LEVEL_CRIT
-    default 5 if BT_NIMBLE_LOG_LEVEL_NONE
+    default 4 if BT_NIMBLE_LOG_LEVEL_NONE
 
 config BT_NIMBLE_MAX_CONNECTIONS
     int "Maximum number of concurrent connections"
@@ -493,3 +490,16 @@ config BT_NIMBLE_MAX_PERIODIC_SYNCS
         Set this option to set the upper limit for number of periodic sync
         connections. This should be less than maximum connections allowed by
         controller.
+
+config BT_NIMBLE_BLUFI_ENABLE
+    bool "Enable blufi functionality"
+    depends on BT_NIMBLE_ENABLED
+    default n
+    help
+        Set this option to enable blufi functionality.
+
+config BT_NIMBLE_USE_ESP_TIMER
+    bool "Enable Esp Timer for Nimble"
+    default y
+    help
+        Set this option to use Esp Timer which has higher priority timer instead of FreeRTOS timer

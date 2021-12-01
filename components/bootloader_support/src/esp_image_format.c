@@ -1,16 +1,8 @@
-// Copyright 2015-2016 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 #include <string.h>
 #include <sys/param.h>
 #include <soc/cpu.h>
@@ -25,19 +17,22 @@
 #include <bootloader_sha.h>
 #include "bootloader_util.h"
 #include "bootloader_common.h"
-#include "soc/soc_memory_layout.h"
+#include "esp_rom_sys.h"
+#include "soc/soc_memory_types.h"
+#include "soc/soc_caps.h"
 #if CONFIG_IDF_TARGET_ESP32
-#include "esp32/rom/rtc.h"
 #include "esp32/rom/secure_boot.h"
 #elif CONFIG_IDF_TARGET_ESP32S2
-#include "esp32s2/rom/rtc.h"
 #include "esp32s2/rom/secure_boot.h"
 #elif CONFIG_IDF_TARGET_ESP32S3
-#include "esp32s3/rom/rtc.h"
 #include "esp32s3/rom/secure_boot.h"
 #elif CONFIG_IDF_TARGET_ESP32C3
-#include "esp32c3/rom/rtc.h"
 #include "esp32c3/rom/secure_boot.h"
+#elif CONFIG_IDF_TARGET_ESP32H2
+#include "esp32h2/rom/secure_boot.h"
+#elif CONFIG_IDF_TARGET_ESP8684
+#include "esp8684/rom/rtc.h"
+#include "esp8684/rom/secure_boot.h"
 #endif
 
 /* Checking signatures as part of verifying images is necessary:
@@ -144,7 +139,7 @@ static esp_err_t image_load(esp_image_load_mode_t mode, const esp_partition_pos_
     // For secure boot V1 on ESP32, we don't calculate SHA or verify signature on bootloaders.
     // (For non-secure boot, we don't verify any SHA-256 hash appended to the bootloader because
     // esptool.py may have rewritten the header - rely on esptool.py having verified the bootloader at flashing time, instead.)
-    bool verify_sha = (data->start_addr != ESP_BOOTLOADER_OFFSET) && do_verify;
+    bool verify_sha = (part->offset != ESP_BOOTLOADER_OFFSET) && do_verify;
 #endif
 
     if (data == NULL || part == NULL) {
@@ -259,7 +254,7 @@ esp_err_t bootloader_load_image(const esp_partition_pos_t *part, esp_image_metad
 #if CONFIG_BOOTLOADER_SKIP_VALIDATE_ALWAYS
     mode = ESP_IMAGE_LOAD_NO_VALIDATE;
 #elif CONFIG_BOOTLOADER_SKIP_VALIDATE_ON_POWER_ON
-    if (rtc_get_reset_reason(0) == POWERON_RESET) {
+    if (esp_rom_get_reset_reason(0) == RESET_REASON_CHIP_POWER_ON) {
         mode = ESP_IMAGE_LOAD_NO_VALIDATE;
     }
 #endif // CONFIG_BOOTLOADER_SKIP_...
@@ -343,14 +338,15 @@ static bool verify_load_addresses(int segment_index, intptr_t load_addr, intptr_
     const char *reason = NULL;
     extern int _dram_start, _dram_end, _loader_text_start, _loader_text_end;
     void *load_addr_p = (void *)load_addr;
-    void *load_end_p = (void *)load_end;
+    void *load_inclusive_end_p = (void *)load_end - 0x1;
+    void *load_exclusive_end_p = (void *)load_end;
 
     if (load_end == load_addr) {
         return true; // zero-length segments are fine
     }
     assert(load_end > load_addr); // data_len<16MB is checked in verify_segment_header() which is called before this, so this should always be true
 
-    if (esp_ptr_in_dram(load_addr_p) && esp_ptr_in_dram(load_end_p)) { /* Writing to DRAM */
+    if (esp_ptr_in_dram(load_addr_p) && esp_ptr_in_dram(load_inclusive_end_p)) { /* Writing to DRAM */
         /* Check if we're clobbering the stack */
         intptr_t sp = (intptr_t)esp_cpu_get_sp();
         if (bootloader_util_regions_overlap(sp - STACK_LOAD_HEADROOM, SOC_ROM_STACK_START,
@@ -385,8 +381,8 @@ static bool verify_load_addresses(int segment_index, intptr_t load_addr, intptr_
                 iram_load_addr = (intptr_t)esp_ptr_diram_dram_to_iram((void *)SOC_DIRAM_DRAM_LOW);
             }
 
-            if (esp_ptr_in_diram_dram(load_end_p)) {
-                iram_load_end = (intptr_t)esp_ptr_diram_dram_to_iram(load_end_p);
+            if (esp_ptr_in_diram_dram(load_inclusive_end_p)) {
+                iram_load_end = (intptr_t)esp_ptr_diram_dram_to_iram(load_exclusive_end_p);
             } else {
                 iram_load_end = (intptr_t)esp_ptr_diram_dram_to_iram((void *)SOC_DIRAM_DRAM_HIGH);
             }
@@ -398,7 +394,7 @@ static bool verify_load_addresses(int segment_index, intptr_t load_addr, intptr_
             }
         }
     }
-    else if (esp_ptr_in_iram(load_addr_p) && esp_ptr_in_iram(load_end_p)) { /* Writing to IRAM */
+    else if (esp_ptr_in_iram(load_addr_p) && esp_ptr_in_iram(load_inclusive_end_p)) { /* Writing to IRAM */
         /* Check for overlap of 'loader' section of IRAM */
         if (bootloader_util_regions_overlap((intptr_t)&_loader_text_start, (intptr_t)&_loader_text_end,
                                             load_addr, load_end)) {
@@ -422,8 +418,8 @@ static bool verify_load_addresses(int segment_index, intptr_t load_addr, intptr_
                 dram_load_addr = (intptr_t)esp_ptr_diram_iram_to_dram((void *)SOC_DIRAM_IRAM_LOW);
             }
 
-            if (esp_ptr_in_diram_iram(load_end_p)) {
-                dram_load_end = (intptr_t)esp_ptr_diram_iram_to_dram(load_end_p);
+            if (esp_ptr_in_diram_iram(load_inclusive_end_p)) {
+                dram_load_end = (intptr_t)esp_ptr_diram_iram_to_dram(load_exclusive_end_p);
             } else {
                 dram_load_end = (intptr_t)esp_ptr_diram_iram_to_dram((void *)SOC_DIRAM_IRAM_HIGH);
             }
@@ -435,13 +431,22 @@ static bool verify_load_addresses(int segment_index, intptr_t load_addr, intptr_
             }
         }
     /* Sections entirely in RTC memory won't overlap with a vanilla bootloader but are valid load addresses, thus skipping them from the check */
-    } else if (esp_ptr_in_rtc_iram_fast(load_addr_p) && esp_ptr_in_rtc_iram_fast(load_end_p)){
+    }
+#if SOC_RTC_FAST_MEM_SUPPORTED
+    else if (esp_ptr_in_rtc_iram_fast(load_addr_p) && esp_ptr_in_rtc_iram_fast(load_inclusive_end_p)){
         return true;
-    } else if (esp_ptr_in_rtc_dram_fast(load_addr_p) && esp_ptr_in_rtc_dram_fast(load_end_p)){
+    } else if (esp_ptr_in_rtc_dram_fast(load_addr_p) && esp_ptr_in_rtc_dram_fast(load_inclusive_end_p)){
         return true;
-    } else if (esp_ptr_in_rtc_slow(load_addr_p) && esp_ptr_in_rtc_slow(load_end_p)) {
+    }
+#endif
+
+#if SOC_RTC_SLOW_MEM_SUPPORTED
+    else if (esp_ptr_in_rtc_slow(load_addr_p) && esp_ptr_in_rtc_slow(load_inclusive_end_p)) {
         return true;
-    } else { /* Not a DRAM or an IRAM or RTC Fast IRAM, RTC Fast DRAM or RTC Slow address */
+    }
+#endif
+
+    else { /* Not a DRAM or an IRAM or RTC Fast IRAM, RTC Fast DRAM or RTC Slow address */
         reason = "bad load address range";
         goto invalid;
     }
@@ -689,7 +694,7 @@ static bool should_load(uint32_t load_addr)
 {
     /* Reload the RTC memory segments whenever a non-deepsleep reset
        is occurring */
-    bool load_rtc_memory = rtc_get_reset_reason(0) != DEEPSLEEP_RESET;
+    bool load_rtc_memory = esp_rom_get_reset_reason(0) != RESET_REASON_CORE_DEEP_SLEEP;
 
     if (should_map(load_addr)) {
         return false;
@@ -704,6 +709,7 @@ static bool should_load(uint32_t load_addr)
     }
 
     if (!load_rtc_memory) {
+#if SOC_RTC_FAST_MEM_SUPPORTED
         if (load_addr >= SOC_RTC_IRAM_LOW && load_addr < SOC_RTC_IRAM_HIGH) {
             ESP_LOGD(TAG, "Skipping RTC fast memory segment at 0x%08x", load_addr);
             return false;
@@ -712,10 +718,14 @@ static bool should_load(uint32_t load_addr)
             ESP_LOGD(TAG, "Skipping RTC fast memory segment at 0x%08x", load_addr);
             return false;
         }
+#endif
+
+#if SOC_RTC_SLOW_MEM_SUPPORTED
         if (load_addr >= SOC_RTC_DATA_LOW && load_addr < SOC_RTC_DATA_HIGH) {
             ESP_LOGD(TAG, "Skipping RTC slow memory segment at 0x%08x", load_addr);
             return false;
         }
+#endif
     }
 
     return true;

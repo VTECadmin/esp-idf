@@ -12,11 +12,12 @@ Wi-Fi
     Wi-Fi <esp_wifi>
     SmartConfig <esp_smartconfig>
     ESP-NOW <esp_now>
-    ESP Mesh <esp_mesh>
+    ESP-WIFI-MESH <esp-wifi-mesh>
+    EasyConnect <esp_dpp>
 
 Code examples for the Wi-Fi API are provided in the :example:`wifi` directory of ESP-IDF examples.
 
-Code examples for ESP-MESH are provided in the :example:`mesh` directory of ESP-IDF examples.
+Code examples for ESP-WIFI-MESH are provided in the :example:`mesh` directory of ESP-IDF examples.
 
 
 Ethernet
@@ -29,14 +30,27 @@ Ethernet
 
 Code examples for the Ethernet API are provided in the :example:`ethernet` directory of ESP-IDF examples.
 
+Thread
+==========
 
-IP Network Layer
-================
+.. toctree::
+   :maxdepth: 1
+
+   Thread <esp_openthread>
+
+Thread is an IPv6-based mesh networking technology for IoT.
+Code examples for the Thread API are provided in the :example:`openthread` directory of ESP-IDF examples.
+
+ESP-NETIF
+=========
 
 .. toctree::
    :maxdepth: 1
 
    ESP-NETIF <esp_netif.rst>
+
+IP Network Layer
+================
 
 .. toctree::
     :hidden:

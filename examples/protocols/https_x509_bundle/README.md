@@ -13,7 +13,6 @@ See the README.md file in the upper level 'examples' directory for more informat
 
 * Open the project configuration menu (`idf.py menuconfig`)
 * Configure Wi-Fi or Ethernet under "Example Connection Configuration" menu. See "Establishing Wi-Fi or Ethernet Connection" section in [examples/protocols/README.md](../README.md) for more details.
-* When using Make build system, set `Default serial port` under `Serial flasher config`.
 * If using a different folder than `certs` for storing certificates then update `Custom Certificate Bundle Path` under `Component config` - `mbedTLS` - `Certificate Bundle`
 
 ### Build and Flash
@@ -38,8 +37,10 @@ I (5971) example_connect: Connected to Ethernet
 I (5971) example_connect: IPv4 address: 192.168.2.137
 I (5971) example_connect: IPv6 address: fe80:0000:0000:0000:bedd:c2ff:fed4:a92b
 I (5981) example: Connecting to 2 URLs
+I (7100) esp-x509-crt-bundle: Certificate validated
 I (8371) example: Connection established to https://www.howsmyssl.com/a/check
+I (11730) esp-x509-crt-bundle: Certificate validated
 I (11821) example: Connection established to https://espressif.com
 I (12821) example: Completed 2 connections
 I (12821) example: Starting over again...
-
+```
