@@ -903,6 +903,7 @@ static esp_err_t i2c_cmd_link_append(i2c_cmd_handle_t cmd_handle, i2c_cmd_t *cmd
 #endif
         if (cmd_desc->head == NULL) {
             ESP_LOGE(I2C_TAG, I2C_CMD_MALLOC_ERR_STR);
+            // printf("\n i2c_cmd_link_append head is NULL");
             goto err;
         }
         cmd_desc->cur = cmd_desc->head;
@@ -915,6 +916,7 @@ static esp_err_t i2c_cmd_link_append(i2c_cmd_handle_t cmd_handle, i2c_cmd_t *cmd
 #endif
         if (cmd_desc->cur->next == NULL) {
             ESP_LOGE(I2C_TAG, I2C_CMD_MALLOC_ERR_STR);
+            // printf("\n i2c_cmd_link_append cmd_desc->cur->next is NULL");
             goto err;
         }
         cmd_desc->cur = cmd_desc->cur->next;
@@ -937,6 +939,7 @@ esp_err_t i2c_master_start(i2c_cmd_handle_t cmd_handle)
     cmd.hw_cmd.op_code = I2C_LL_CMD_RESTART;
     cmd.hw_cmd.byte_num = 0;
     cmd.data = NULL;
+    // printf("\n i2c_master_start before i2c_cmd_link_append call");
     return i2c_cmd_link_append(cmd_handle, &cmd);
 }
 
@@ -950,6 +953,7 @@ esp_err_t i2c_master_stop(i2c_cmd_handle_t cmd_handle)
     cmd.hw_cmd.op_code = I2C_LL_CMD_STOP;
     cmd.hw_cmd.byte_num = 0;
     cmd.data = NULL;
+    // printf("\n i2c_master_stop before i2c_cmd_link_append call");
     return i2c_cmd_link_append(cmd_handle, &cmd);
 }
 
@@ -971,6 +975,7 @@ esp_err_t i2c_master_write(i2c_cmd_handle_t cmd_handle, const uint8_t *data, siz
         cmd.hw_cmd.op_code = I2C_LL_CMD_WRITE;
         cmd.hw_cmd.byte_num = len_tmp;
         cmd.data = (uint8_t*) data + data_offset;
+        // printf("\n i2c_master_write before i2c_cmd_link_append call");
         ret = i2c_cmd_link_append(cmd_handle, &cmd);
         data_offset += len_tmp;
         if (ret != ESP_OK) {
@@ -991,6 +996,7 @@ esp_err_t i2c_master_write_byte(i2c_cmd_handle_t cmd_handle, uint8_t data, bool 
     cmd.hw_cmd.byte_num = 1;
     cmd.data = NULL;
     cmd.byte_cmd = data;
+    // printf("\n i2c_master_write_byte before i2c_cmd_link_append call");
     return i2c_cmd_link_append(cmd_handle, &cmd);
 }
 
@@ -1009,6 +1015,7 @@ static esp_err_t i2c_master_read_static(i2c_cmd_handle_t cmd_handle, uint8_t *da
         cmd.hw_cmd.byte_num = len_tmp;
         cmd.hw_cmd.op_code = I2C_LL_CMD_READ;
         cmd.data = data + data_offset;
+        // printf("\n i2c_master_read_static before i2c_cmd_link_append call");
         ret = i2c_cmd_link_append(cmd_handle, &cmd);
         data_offset += len_tmp;
         if (ret != ESP_OK) {
@@ -1031,6 +1038,7 @@ esp_err_t i2c_master_read_byte(i2c_cmd_handle_t cmd_handle, uint8_t *data, i2c_a
     cmd.hw_cmd.byte_num = 1;
     cmd.hw_cmd.op_code = I2C_LL_CMD_READ;
     cmd.data = data;
+    // printf("\n i2c_master_read_byte before i2c_cmd_link_append call");
     return i2c_cmd_link_append(cmd_handle, &cmd);
 }
 
