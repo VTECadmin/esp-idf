@@ -21,6 +21,8 @@
 #include "freertos/task.h"
 #include "driver/gpio.h"
 
+#define UNIT_TEST false
+
 static const char *TAG = "ksz8863";
 #define PHY_CHECK(a, str, goto_tag, ...)                                          \
     do                                                                            \
@@ -94,21 +96,28 @@ static esp_err_t ksz8863_get_link(esp_eth_phy_t *phy)
     phy_ksz8863_t *ksz8863 = __containerof(phy, phy_ksz8863_t, parent);
     esp_eth_mediator_t *eth = ksz8863->eth;
     bmsr_reg_t bmsr;
+    #if UNIT_TEST==false
     bmsr_reg_t bmsr1;
-
+    #endif
     PHY_CHECK(eth->phy_reg_read(eth, ksz8863->addr, ETH_PHY_BMSR_REG_ADDR, &(bmsr.val)) == ESP_OK, "read BMSR failed", err);
+    #if UNIT_TEST==false
     PHY_CHECK(eth->phy_reg_read(eth, (ksz8863->addr + 1), ETH_PHY_BMSR_REG_ADDR, &(bmsr1.val)) == ESP_OK, "read BMSR failed", err);
+    #endif
     eth_link_t link = bmsr.link_status ? ETH_LINK_UP : ETH_LINK_DOWN;
+    #if UNIT_TEST==false
     eth_link_t link1 = bmsr1.link_status ? ETH_LINK_UP : ETH_LINK_DOWN;
+    #endif
     eth_link_t masterlink;
     if(link == ETH_LINK_UP)
 	{
 		masterlink = ETH_LINK_UP;
 	}
+    #if UNIT_TEST==false
 	else if(link1 == ETH_LINK_UP)
 	{
 		masterlink = ETH_LINK_UP;
 	}
+    #endif
 	else
 	{
         masterlink = ETH_LINK_DOWN;
@@ -119,13 +128,18 @@ static esp_err_t ksz8863_get_link(esp_eth_phy_t *phy)
 
     if (ksz8863->link_status != masterlink) {
         if (link == ETH_LINK_UP) {
+            if(ksz8863->addr == 0x1)
             ESP_LOGI(TAG, "Link from 1");
+            else if(ksz8863->addr == 0x2)
+            ESP_LOGI(TAG, "Link from 2");
             phy->negotiate(phy,0);
         }
+        #if UNIT_TEST==false
         else if (link1 == ETH_LINK_UP) {
             ESP_LOGI(TAG, "Link from 2");
             phy->negotiate(phy,1);
         }
+        #endif
         else {
             PHY_CHECK(eth->on_state_changed(eth, ETH_STATE_LINK, (void *)link) == ESP_OK, "send link event failed", err);
             ksz8863->link_status = link;
