@@ -262,7 +262,7 @@ esp_err_t esp_eth_start(esp_eth_handle_t hdl)
         ret = ESP_ERR_INVALID_STATE;
         goto err;
     }
-    ETH_CHECK(eth_driver->phy->reset(eth_driver->phy) == ESP_OK, "reset phy failed", err, ESP_FAIL);
+    // ETH_CHECK(eth_driver->phy->reset(eth_driver->phy) == ESP_OK, "reset phy failed", err, ESP_FAIL);
     ETH_CHECK(xTimerStart(eth_driver->check_link_timer, 0) == pdPASS,
               "start eth_link_timer failed", err, ESP_FAIL);
     ETH_CHECK(esp_event_post(ETH_EVENT, ETHERNET_EVENT_START, &eth_driver, sizeof(eth_driver), 0) == ESP_OK,

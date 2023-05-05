@@ -270,7 +270,7 @@ static esp_err_t ksz8863_init(esp_eth_phy_t *phy)
     /* Power on Ethernet PHY */
     PHY_CHECK(ksz8863_pwrctl(phy, true) == ESP_OK, "power on Ethernet PHY failed", err);
     /* Reset Ethernet PHY */
-    PHY_CHECK(ksz8863_reset(phy) == ESP_OK, "reset Ethernet PHY failed", err);
+    // PHY_CHECK(ksz8863_reset(phy) == ESP_OK, "reset Ethernet PHY failed", err);
     /* Check PHY ID */
     phyidr1_reg_t id1;
     phyidr2_reg_t id2;
