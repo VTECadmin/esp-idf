@@ -19,6 +19,7 @@
 #include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_eth.h"
+#include "esp_eth_mac_esp32_diag.h"
 #include "esp_pm.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
@@ -30,6 +31,7 @@
 #include "hal/emac.h"
 #include "soc/soc.h"
 #include "sdkconfig.h"
+#include "sms_ksz_smi.h"
 
 static const char *TAG = "emac_esp32";
 #define MAC_CHECK(a, str, goto_tag, ret_value, ...)                               \
@@ -50,6 +52,7 @@ typedef struct {
     esp_eth_mediator_t *eth;
     emac_hal_context_t hal;
     intr_handle_t intr_hdl;
+    SemaphoreHandle_t smi_lock;
     TaskHandle_t rx_task_hdl;
     uint32_t sw_reset_timeout_ms;
     uint32_t frames_remain;
@@ -59,10 +62,30 @@ typedef struct {
     uint8_t *rx_buf[CONFIG_ETH_DMA_RX_BUFFER_NUM];
     uint8_t *tx_buf[CONFIG_ETH_DMA_TX_BUFFER_NUM];
     bool isr_need_yield;
+    portMUX_TYPE tx_diag_lock;
+    esp_eth_tx_diag_stats_t tx_diag;
+    bool tx_diag_pending[CONFIG_ETH_DMA_TX_BUFFER_NUM];
+    bool tx_diag_ready;
 #ifdef CONFIG_PM_ENABLE
     esp_pm_lock_handle_t pm_lock;
 #endif
 } emac_esp32_t;
+
+// Descriptor memory is owned by this MAC; no hardware register pointer is
+// dereferenced as a software address. The same lock protects reuse and snapshots.
+static void emac_esp32_collect_tx(emac_esp32_t *emac)
+{
+    eth_dma_tx_descriptor_t *base = (eth_dma_tx_descriptor_t *)
+        ((uint8_t *)emac->hal.descriptors +
+         sizeof(eth_dma_rx_descriptor_t) * CONFIG_ETH_DMA_RX_BUFFER_NUM);
+    uint32_t pending = 0;
+    for (unsigned i = 0; i < CONFIG_ETH_DMA_TX_BUFFER_NUM; ++i) {
+        esp_eth_tx_diag_reap(&emac->tx_diag, &emac->tx_diag_pending[i],
+                            base[i].TDES0.Value);
+        pending += emac->tx_diag_pending[i];
+    }
+    emac->tx_diag.pending_desc = pending;
+}
 
 static esp_err_t emac_esp32_set_mediator(esp_eth_mac_t *mac, esp_eth_mediator_t *eth)
 {
@@ -75,7 +98,7 @@ err:
     return ret;
 }
 
-static esp_err_t emac_esp32_write_phy_reg(esp_eth_mac_t *mac, uint32_t phy_addr, uint32_t phy_reg, uint32_t reg_value)
+static esp_err_t emac_esp32_write_phy_reg_hw(esp_eth_mac_t *mac, uint32_t phy_addr, uint32_t phy_reg, uint32_t reg_value)
 {
     esp_err_t ret = ESP_OK;
     emac_esp32_t *emac = __containerof(mac, emac_esp32_t, parent);
@@ -96,7 +119,7 @@ err:
     return ret;
 }
 
-static esp_err_t emac_esp32_read_phy_reg(esp_eth_mac_t *mac, uint32_t phy_addr, uint32_t phy_reg, uint32_t *reg_value)
+static esp_err_t emac_esp32_read_phy_reg_hw(esp_eth_mac_t *mac, uint32_t phy_addr, uint32_t phy_reg, uint32_t *reg_value)
 {
     esp_err_t ret = ESP_OK;
     MAC_CHECK(reg_value, "can't set reg_value to null", err, ESP_ERR_INVALID_ARG);
@@ -116,6 +139,107 @@ static esp_err_t emac_esp32_read_phy_reg(esp_eth_mac_t *mac, uint32_t phy_addr, 
     *reg_value = emac_hal_get_phy_data(&emac->hal);
     return ESP_OK;
 err:
+    return ret;
+}
+
+static void emac_esp32_init_smi_gpio(emac_esp32_t *emac);
+
+typedef struct { emac_esp32_t *emac; unsigned half_us; } sms_smi_context_t;
+static void sms_smi_clock(void *ctx, int level)
+{
+    sms_smi_context_t *s = ctx;
+    gpio_set_level(s->emac->smi_mdc_gpio_num, level);
+}
+static void sms_smi_data(void *ctx, int level)
+{
+    sms_smi_context_t *s = ctx;
+    gpio_set_level(s->emac->smi_mdio_gpio_num, level);
+}
+static int sms_smi_sample(void *ctx)
+{
+    sms_smi_context_t *s = ctx;
+    return gpio_get_level(s->emac->smi_mdio_gpio_num);
+}
+static void sms_smi_delay(void *ctx)
+{
+    sms_smi_context_t *s = ctx;
+    ets_delay_us(s->half_us);
+}
+
+/* Same mutex as hardware MIIM; all exit paths restore management pin routing.
+   No RMII pin, switch forwarding, speed, duplex, or clock configuration changes. */
+static esp_err_t sms_smi_access_profile(emac_esp32_t *emac, uint8_t reg,
+    uint32_t *value, bool write, unsigned profile, bool miim, uint8_t phy, bool raw)
+{
+    if (profile >= SMS_KSZ_V3_PROFILES || !value) return ESP_ERR_INVALID_ARG;
+    if (emac_hal_is_mii_busy(&emac->hal)) return ESP_ERR_INVALID_STATE;
+    uint32_t mdc_mux = REG_READ(GPIO_PIN_MUX_REG[emac->smi_mdc_gpio_num]);
+    uint32_t mdio_mux = REG_READ(GPIO_PIN_MUX_REG[emac->smi_mdio_gpio_num]);
+    gpio_set_level(emac->smi_mdc_gpio_num, 0);
+    gpio_set_level(emac->smi_mdio_gpio_num, 1);
+    gpio_set_direction(emac->smi_mdc_gpio_num, GPIO_MODE_OUTPUT);
+    gpio_set_direction(emac->smi_mdio_gpio_num, GPIO_MODE_INPUT_OUTPUT_OD);
+    gpio_matrix_out(emac->smi_mdc_gpio_num, SIG_GPIO_OUT_IDX, false, false);
+    gpio_matrix_out(emac->smi_mdio_gpio_num, SIG_GPIO_OUT_IDX, false, false);
+    PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[emac->smi_mdc_gpio_num], PIN_FUNC_GPIO);
+    PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[emac->smi_mdio_gpio_num], PIN_FUNC_GPIO);
+    gpio_set_pull_mode(emac->smi_mdio_gpio_num, GPIO_PULLUP_ONLY);
+    sms_smi_context_t context = {emac, sms_ksz_v3_half_us(profile)};
+    sms_ksz_smi_bus_t bus = {&context, sms_smi_clock, sms_smi_data, sms_smi_sample, sms_smi_delay};
+    uint32_t result = 0;
+    bool valid = true;
+    if (write) sms_ksz_smi_write(&bus, reg, (uint8_t)*value);
+    else {
+        result = sms_ksz_v3_capture(&bus, !miim, phy, reg, sms_ksz_v3_phase(profile));
+        if (!raw) valid = sms_ksz_v3_decode(result, profile, !miim, &result);
+    }
+    emac_esp32_init_smi_gpio(emac);
+    REG_WRITE(GPIO_PIN_MUX_REG[emac->smi_mdc_gpio_num], mdc_mux);
+    REG_WRITE(GPIO_PIN_MUX_REG[emac->smi_mdio_gpio_num], mdio_mux);
+    if (!valid) return ESP_ERR_INVALID_RESPONSE;
+    if (!write) *value = result;
+    return ESP_OK;
+}
+
+static esp_err_t emac_esp32_read_phy_reg(esp_eth_mac_t *mac, uint32_t addr,
+                                       uint32_t reg, uint32_t *value)
+{
+    if (!value) return ESP_ERR_INVALID_ARG;
+    emac_esp32_t *emac = __containerof(mac, emac_esp32_t, parent);
+    if (xSemaphoreTake(emac->smi_lock, pdMS_TO_TICKS(100)) != pdTRUE) return ESP_ERR_TIMEOUT;
+    esp_err_t ret;
+    if (addr >= SMS_KSZ_V3_SMI_BASE && addr < SMS_KSZ_V3_SMI_BASE + SMS_KSZ_V3_PROFILES && reg <= 0xc6)
+        ret = sms_smi_access_profile(emac, (uint8_t)reg, value, false, addr - SMS_KSZ_V3_SMI_BASE, false, 0, false);
+    else if (addr >= SMS_KSZ_V3_MIIM_BASE && addr < SMS_KSZ_V3_MIIM_BASE + SMS_KSZ_V3_PROFILES * 2 && reg <= 31)
+        ret = sms_smi_access_profile(emac, (uint8_t)reg, value, false, (addr - SMS_KSZ_V3_MIIM_BASE) / 2, true,
+                                     (uint8_t)(1 + (addr - SMS_KSZ_V3_MIIM_BASE) % 2), false);
+    else if (addr >= SMS_KSZ_V3_RAW_BASE && addr < SMS_KSZ_V3_RAW_BASE + SMS_KSZ_V3_PROFILES && reg <= 0xc6)
+        ret = sms_smi_access_profile(emac, (uint8_t)reg, value, false, addr - SMS_KSZ_V3_RAW_BASE, false, 0, true);
+    else if (addr == SMS_KSZ_SMI_ADDRESS && reg <= 0xc6)
+        ret = sms_smi_access_profile(emac, (uint8_t)reg, value, false, 0, false, 0, false);
+    else if (addr <= 31 && reg <= 31)
+        ret = emac_esp32_read_phy_reg_hw(mac, addr, reg, value);
+    else ret = ESP_ERR_INVALID_ARG;
+    xSemaphoreGive(emac->smi_lock);
+    return ret;
+}
+
+static esp_err_t emac_esp32_write_phy_reg(esp_eth_mac_t *mac, uint32_t addr,
+                                        uint32_t reg, uint32_t value)
+{
+    emac_esp32_t *emac = __containerof(mac, emac_esp32_t, parent);
+    if (xSemaphoreTake(emac->smi_lock, pdMS_TO_TICKS(100)) != pdTRUE) return ESP_ERR_TIMEOUT;
+    esp_err_t ret;
+    if (addr == SMS_KSZ_SMI_ADDRESS || (addr >= SMS_KSZ_V3_SMI_BASE && addr < SMS_KSZ_V3_SMI_BASE + SMS_KSZ_V3_PROFILES)) {
+        unsigned profile = addr == SMS_KSZ_SMI_ADDRESS ? 0 : addr - SMS_KSZ_V3_SMI_BASE;
+        /* Strict whitelist: only indirect MIB read selection, never forwarding. */
+        if ((reg == 0x79 && value == 0x1c) || (reg == 0x7a && value <= 0x5f))
+            ret = sms_smi_access_profile(emac, (uint8_t)reg, &value, true, profile, false, 0, false);
+        else ret = ESP_ERR_NOT_SUPPORTED;
+    } else if (addr <= 31 && reg <= 31)
+        ret = emac_esp32_write_phy_reg_hw(mac, addr, reg, value);
+    else ret = ESP_ERR_INVALID_ARG;
+    xSemaphoreGive(emac->smi_lock);
     return ret;
 }
 
@@ -219,11 +343,72 @@ static esp_err_t emac_esp32_transmit(esp_eth_mac_t *mac, uint8_t *buf, uint32_t 
 {
     esp_err_t ret = ESP_OK;
     emac_esp32_t *emac = __containerof(mac, emac_esp32_t, parent);
-    uint32_t sent_len = emac_hal_transmit_frame(&emac->hal, buf, length);
+    MAC_CHECK(buf && length, "empty TX frame", err, ESP_ERR_INVALID_ARG);
+    portENTER_CRITICAL(&emac->tx_diag_lock);
+    if (!emac->tx_diag_ready) {
+        portEXIT_CRITICAL(&emac->tx_diag_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+    emac_esp32_collect_tx(emac);
+    eth_dma_tx_descriptor_t *first = emac->hal.tx_desc;
+    eth_dma_tx_descriptor_t *base = (eth_dma_tx_descriptor_t *)
+        ((uint8_t *)emac->hal.descriptors +
+         sizeof(eth_dma_rx_descriptor_t) * CONFIG_ETH_DMA_RX_BUFFER_NUM);
+    unsigned start = (unsigned)(first - base);
+    unsigned used = length / CONFIG_ETH_DMA_BUFFER_SIZE +
+                    (length % CONFIG_ETH_DMA_BUFFER_SIZE != 0);
+    bool available = used <= CONFIG_ETH_DMA_TX_BUFFER_NUM;
+    // DMA can complete AFTER the general sweep. Recheck every candidate here
+    // and preserve its final status before allowing HAL to overwrite it.
+    // Once CPU-owned, it stays stable until this locked submission hands it
+    // back to DMA. If any candidate is still DMA-owned, do not invoke HAL.
+    for (unsigned i = 0; available && i < used; ++i) {
+        unsigned slot = (start + i) % CONFIG_ETH_DMA_TX_BUFFER_NUM;
+        uint32_t status = base[slot].TDES0.Value;
+        if (status & (UINT32_C(1) << 31)) {
+            available = false;
+        } else {
+            bool was_pending = emac->tx_diag_pending[slot];
+            esp_eth_tx_diag_reap(&emac->tx_diag, &emac->tx_diag_pending[slot], status);
+            emac->tx_diag.pending_desc -= was_pending;
+        }
+    }
+    uint32_t sent_len = available ? emac_hal_transmit_frame(&emac->hal, buf, length) : 0;
+    if (sent_len == length) {
+        for (unsigned i = 0; i < used; ++i)
+            emac->tx_diag_pending[(start + i) % CONFIG_ETH_DMA_TX_BUFFER_NUM] = true;
+        ++emac->tx_diag.submitted_frames;
+        emac->tx_diag.pending_desc += used;
+    }
+    portEXIT_CRITICAL(&emac->tx_diag_lock);
     MAC_CHECK(sent_len == length, "insufficient TX buffer size", err, ESP_ERR_INVALID_SIZE);
     return ESP_OK;
 err:
     return ret;
+}
+
+esp_err_t esp_eth_mac_esp32_get_diagnostics(esp_eth_mac_t *mac,
+                                         esp_eth_mac_esp32_diag_t *out)
+{
+    if (!mac || !out || mac->transmit != emac_esp32_transmit)
+        return ESP_ERR_INVALID_ARG;
+    emac_esp32_t *emac = __containerof(mac, emac_esp32_t, parent);
+    portENTER_CRITICAL(&emac->tx_diag_lock);
+    if (!emac->tx_diag_ready) {
+        portEXIT_CRITICAL(&emac->tx_diag_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+    emac_esp32_collect_tx(emac);
+    out->tx = emac->tx_diag;
+    out->mac_config = emac->hal.mac_regs->gmacconfig.val;
+    out->mac_debug = emac->hal.mac_regs->emacdebug.val;
+    out->dma_status = emac->hal.dma_regs->dmastatus.val;
+    out->dma_operation = emac->hal.dma_regs->dmaoperation_mode.val;
+    out->clock_control = emac->hal.ext_regs->ex_clk_ctrl.val;
+    out->phy_interface = emac->hal.ext_regs->ex_phyinf_conf.val;
+    out->tx_current_descriptor = emac->hal.dma_regs->dmatxcurrdesc;
+    portEXIT_CRITICAL(&emac->tx_diag_lock);
+    return ESP_OK;
 }
 
 static esp_err_t emac_esp32_receive(esp_eth_mac_t *mac, uint8_t *buf, uint32_t *length)
@@ -314,6 +499,12 @@ static esp_err_t emac_esp32_init(esp_eth_mac_t *mac)
     emac_hal_init_mac_default(&emac->hal);
     /* init dma registers by default */
     emac_hal_init_dma_default(&emac->hal);
+    /* Diagnostic bookkeeping only; descriptor contents remain HAL-owned. */
+    portENTER_CRITICAL(&emac->tx_diag_lock);
+    memset(emac->tx_diag_pending, 0, sizeof(emac->tx_diag_pending));
+    emac->tx_diag.pending_desc = 0;
+    emac->tx_diag_ready = true;
+    portEXIT_CRITICAL(&emac->tx_diag_lock);
     /* get emac address from efuse */
     MAC_CHECK(esp_read_mac(emac->addr, ESP_MAC_ETH) == ESP_OK, "fetch ethernet mac address failed", err, ESP_FAIL);
     /* set MAC address to emac register */
@@ -323,6 +514,7 @@ static esp_err_t emac_esp32_init(esp_eth_mac_t *mac)
 #endif
     return ESP_OK;
 err:
+    emac->tx_diag_ready = false;
     eth->on_state_changed(eth, ETH_STATE_DEINIT, NULL);
     periph_module_disable(PERIPH_EMAC_MODULE);
     return ret;
@@ -332,6 +524,15 @@ static esp_err_t emac_esp32_deinit(esp_eth_mac_t *mac)
 {
     emac_esp32_t *emac = __containerof(mac, emac_esp32_t, parent);
     esp_eth_mediator_t *eth = emac->eth;
+    portENTER_CRITICAL(&emac->tx_diag_lock);
+    if (emac->tx_diag_ready) emac_esp32_collect_tx(emac);
+    for (unsigned i = 0; i < CONFIG_ETH_DMA_TX_BUFFER_NUM; ++i) {
+        emac->tx_diag.abandoned_desc += emac->tx_diag_pending[i];
+        emac->tx_diag_pending[i] = false;
+    }
+    emac->tx_diag.pending_desc = 0;
+    emac->tx_diag_ready = false;
+    portEXIT_CRITICAL(&emac->tx_diag_lock);
 #ifdef CONFIG_PM_ENABLE
     esp_pm_lock_release(emac->pm_lock);
 #endif
@@ -359,6 +560,7 @@ static esp_err_t emac_esp32_del(esp_eth_mac_t *mac)
 {
     emac_esp32_t *emac = __containerof(mac, emac_esp32_t, parent);
     esp_intr_free(emac->intr_hdl);
+    vSemaphoreDelete(emac->smi_lock);
 #ifdef CONFIG_PM_ENABLE
     if (emac->pm_lock) {
         esp_pm_lock_delete(emac->pm_lock);
@@ -402,6 +604,7 @@ esp_eth_mac_t *esp_eth_mac_new_esp32(const eth_mac_config_t *config)
         emac = calloc(1, sizeof(emac_esp32_t));
     }
     MAC_CHECK(emac, "calloc emac failed", err, NULL);
+    emac->tx_diag_lock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
     /* alloc memory for ethernet dma descriptor */
     uint32_t desc_size = CONFIG_ETH_DMA_RX_BUFFER_NUM * sizeof(eth_dma_rx_descriptor_t) +
                          CONFIG_ETH_DMA_TX_BUFFER_NUM * sizeof(eth_dma_tx_descriptor_t);
@@ -424,6 +627,8 @@ esp_eth_mac_t *esp_eth_mac_new_esp32(const eth_mac_config_t *config)
     /* initialize hal layer driver */
     emac_hal_init(&emac->hal, descriptors, emac->rx_buf, emac->tx_buf);
     emac->sw_reset_timeout_ms = config->sw_reset_timeout_ms;
+    emac->smi_lock = xSemaphoreCreateMutex();
+    MAC_CHECK(emac->smi_lock, "create management mutex failed", err, NULL);
     emac->smi_mdc_gpio_num = config->smi_mdc_gpio_num;
     emac->smi_mdio_gpio_num = config->smi_mdio_gpio_num;
     emac->parent.set_mediator = emac_esp32_set_mediator;
@@ -470,6 +675,7 @@ err:
         if (emac->rx_task_hdl) {
             vTaskDelete(emac->rx_task_hdl);
         }
+        if (emac->smi_lock) vSemaphoreDelete(emac->smi_lock);
         if (emac->intr_hdl) {
             esp_intr_free(emac->intr_hdl);
         }

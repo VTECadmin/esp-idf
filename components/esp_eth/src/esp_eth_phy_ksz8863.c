@@ -20,6 +20,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
+#include "sms_ksz_smi.h"
+#include "sms_ksz_host_mode.h"
+static void ksz8863_snapshot_globals(esp_eth_mediator_t *eth);
 
 #define UNIT_TEST false
 
@@ -79,6 +82,7 @@ typedef struct {
     uint32_t autonego_timeout_ms;
     eth_link_t link_status;
 	int reset_gpio_num;
+    TickType_t last_diagnostic_tick;
 } phy_ksz8863_t;
 
 static esp_err_t ksz8863_set_mediator(esp_eth_phy_t *phy, esp_eth_mediator_t *eth)
@@ -91,10 +95,21 @@ err:
     return ESP_ERR_INVALID_ARG;
 }
 
+static void ksz8863_log_status(uint32_t address, bmsr_reg_t status)
+{
+    if (status.val == 0 || status.val == 0xffff) {
+        ESP_LOGW(TAG, "NET PHY%u unusable BMSR=%04x", address, status.val);
+    } else {
+        ESP_LOGI(TAG, "NET PHY%u BMSR=%04x link_sample=%u autoneg_sample=%u",
+                 address, status.val, status.link_status, status.auto_nego_complete);
+    }
+}
+
 static esp_err_t ksz8863_get_link(esp_eth_phy_t *phy)
 {
     phy_ksz8863_t *ksz8863 = __containerof(phy, phy_ksz8863_t, parent);
     esp_eth_mediator_t *eth = ksz8863->eth;
+    ksz8863_snapshot_globals(eth);
     bmsr_reg_t bmsr;
     #if UNIT_TEST==false
     bmsr_reg_t bmsr1;
@@ -108,6 +123,17 @@ static esp_err_t ksz8863_get_link(esp_eth_phy_t *phy)
     eth_link_t link1 = bmsr1.link_status ? ETH_LINK_UP : ETH_LINK_DOWN;
     #endif
     eth_link_t masterlink;
+    // Reuse samples from the existing polling path. A second MDIO caller would
+    // race the MAC's unprotected busy-check/command sequence. BMSR link is
+    // latch-low, so the next poll can differ after a transient link loss.
+    TickType_t now = xTaskGetTickCount();
+    if ((TickType_t)(now - ksz8863->last_diagnostic_tick) >= pdMS_TO_TICKS(30000)) {
+        ksz8863->last_diagnostic_tick = now;
+        ksz8863_log_status(ksz8863->addr, bmsr);
+        #if UNIT_TEST==false
+        ksz8863_log_status(ksz8863->addr + 1, bmsr1);
+        #endif
+    }
     if(link == ETH_LINK_UP)
 	{
 		masterlink = ETH_LINK_UP;
@@ -213,10 +239,14 @@ static esp_err_t ksz8863_negotiate(esp_eth_phy_t *phy, uint8_t address)
     /* Update information about link, speed, duplex */
     PHY_CHECK(eth->phy_reg_read(eth, (ksz8863->addr + address), ETH_PHY_BMSR_REG_ADDR, &(bmsr.val)) == ESP_OK, "read BMSR failed", err);
     eth_link_t link = bmsr.link_status ? ETH_LINK_UP : ETH_LINK_DOWN;
-    eth_speed_t speed = ETH_SPEED_10M;
-    eth_duplex_t duplex = ETH_DUPLEX_HALF;
+    /* Copper PHYs negotiate independently; this event configures the fixed
+       ESP32 <-> KSZ port-3 RMII host link, not the copper port's result. */
+    eth_speed_t speed = SMS_KSZ_HOST_SPEED;
+    eth_duplex_t duplex = SMS_KSZ_HOST_DUPLEX;
     PHY_CHECK(eth->on_state_changed(eth, ETH_STATE_SPEED, (void *)speed) == ESP_OK, "send speed event failed", err);
     PHY_CHECK(eth->on_state_changed(eth, ETH_STATE_DUPLEX, (void *)duplex) == ESP_OK, "send duplex event failed", err);
+    ESP_LOGI(TAG, "NET RMII host requested=%uMbps/half; verify G06=%02x and live EMAC speed/duplex bits",
+             SMS_KSZ_HOST_SPEED_MBPS, SMS_KSZ_HOST_CONTROL4);
     if (ksz8863->link_status != link) {
         PHY_CHECK(eth->on_state_changed(eth, ETH_STATE_LINK, (void *)link) == ESP_OK, "send link event failed", err);
         ksz8863->link_status = link;
@@ -277,10 +307,94 @@ static esp_err_t ksz8863_del(esp_eth_phy_t *phy)
     return ESP_OK;
 }
 
+/* v3 survey is read-only, including on a failing initialization path. */
+static int ksz_v3_profile = -1;
+static TickType_t ksz_v3_last_tick;
+
+static esp_err_t ksz8863_v3_read(esp_eth_mediator_t *eth, unsigned profile,
+                               unsigned reference, uint32_t *value)
+{
+    const uint8_t regs[] = {0x00, 0x01, 0x06, 0x35, 2, 3, 2, 3};
+    uint32_t address = reference < 4 ? SMS_KSZ_V3_SMI_BASE + profile :
+        SMS_KSZ_V3_MIIM_BASE + profile * 2U + (reference >= 6 ? 1U : 0U);
+    return eth->phy_reg_read(eth, address, regs[reference], value);
+}
+
+static void ksz8863_probe_v3(esp_eth_mediator_t *eth, const char *stage)
+{
+    const uint32_t expected[] = {0x88, 0x31, SMS_KSZ_HOST_CONTROL4, 0x80, 0x22, 0x1430, 0x22, 0x1430};
+    const uint32_t masks[] = {0xff, 0xf1, 0xff, 0xff, 0xffff, 0xfff0, 0xffff, 0xfff0};
+    uint32_t passing = 0;
+    ksz_v3_profile = -1;
+    ESP_LOGI(TAG, "NET KSZ v3 survey stage=%s: read-only; G00/G01/G06/P35 and both PHY IDs, 3 repetitions", stage);
+    /* Capture hardware MIIM BEFORE bit-banging/remuxing for comparison. */
+    for (unsigned port = 1; port <= 2; ++port) {
+        uint32_t id1 = 0, id2 = 0;
+        esp_err_t one = eth->phy_reg_read(eth, port, ETH_PHY_IDR1_REG_ADDR, &id1);
+        esp_err_t two = eth->phy_reg_read(eth, port, ETH_PHY_IDR2_REG_ADDR, &id2);
+        ESP_LOGI(TAG, "NET KSZ v3 hardware-before-remux PHY%u=%04x/%04x result=%s/%s",
+                 port, id1, id2, esp_err_to_name(one), esp_err_to_name(two));
+    }
+    for (unsigned profile = 0; profile < SMS_KSZ_V3_PROFILES; ++profile) {
+        unsigned matches = 0, errors = 0;
+        bool stable = true;
+        uint32_t values[8] = {0}, raw = 0;
+        for (unsigned repeat = 0; repeat < 3; ++repeat) {
+            for (unsigned ref = 0; ref < 8; ++ref) {
+                uint32_t value = 0;
+                esp_err_t err = ksz8863_v3_read(eth, profile, ref, &value);
+                if (err != ESP_OK) ++errors;
+                else if ((value & masks[ref]) == expected[ref]) ++matches;
+                if (repeat && value != values[ref]) stable = false;
+                values[ref] = value;
+            }
+        }
+        esp_err_t raw_err = eth->phy_reg_read(eth, SMS_KSZ_V3_RAW_BASE + profile, 0, &raw);
+        if (matches == 24 && errors == 0 && stable) passing |= 1U << profile;
+        ESP_LOGI(TAG, "NET KSZ v3 p=%u %s matches=%u/24 errors=%u stable=%d G00/01/06/P35=%02x/%02x/%02x/%02x PHY1=%04x/%04x PHY2=%04x/%04x raw18_G00=%05x(%s)",
+                 profile, sms_ksz_v3_name(profile), matches, errors, stable,
+                 values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7],
+                 raw, esp_err_to_name(raw_err));
+    }
+    ksz_v3_profile = sms_ksz_v3_select(passing);
+    ksz_v3_last_tick = xTaskGetTickCount();
+    if (ksz_v3_profile < 0)
+        ESP_LOGW(TAG, "NET KSZ v3 UNTRUSTED: no profile passed all references; no MIB selector writes or counter claims");
+    else
+        ESP_LOGI(TAG, "NET KSZ v3 validated_mask=%02x selected=%d %s; MIB requires selector readback and reference recheck",
+                 passing, ksz_v3_profile, sms_ksz_v3_name((unsigned)ksz_v3_profile));
+}
+
+static esp_err_t ksz8863_stable_phy_id(esp_eth_mediator_t *eth, uint32_t addr,
+                                     uint32_t *id1, uint32_t *id2)
+{
+    unsigned stable = 0;
+    uint32_t previous = 0;
+    for (unsigned attempt = 0; attempt < 8; ++attempt) {
+        uint32_t one = 0, two = 0;
+        esp_err_t err = eth->phy_reg_read(eth, addr, ETH_PHY_IDR1_REG_ADDR, &one);
+        if (err == ESP_OK) err = eth->phy_reg_read(eth, addr, ETH_PHY_IDR2_REG_ADDR, &two);
+        bool valid = err == ESP_OK && one == 0x22 && (two & 0xfff0) == 0x1430;
+        stable = valid ? (stable && two == previous ? stable + 1 : 1) : 0;
+        previous = two;
+        if (stable == 3) {
+            *id1 = one; *id2 = two;
+            ESP_LOGI(TAG, "NET KSZ v3 hardware PHY ID stable=3 phy=%u raw=%04x/%04x attempt=%u", addr, one, two, attempt + 1);
+            return ESP_OK;
+        }
+        if (!valid) ESP_LOGW(TAG, "NET KSZ v3 hardware PHY ID unstable phy=%u attempt=%u raw=%04x/%04x result=%s",
+                            addr, attempt + 1, one, two, esp_err_to_name(err));
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    ESP_LOGE(TAG, "NET KSZ v3 PHY identification remains invalid; failing initialization without bypassing ID check");
+    return ESP_ERR_INVALID_RESPONSE;
+}
+
 static esp_err_t ksz8863_init(esp_eth_phy_t *phy)
 {
     phy_ksz8863_t *ksz8863 = __containerof(phy, phy_ksz8863_t, parent);
     esp_eth_mediator_t *eth = ksz8863->eth;
+    ksz8863_probe_v3(eth, "boot-before-PHY-ID");
     /* Power on Ethernet PHY */
     PHY_CHECK(ksz8863_pwrctl(phy, true) == ESP_OK, "power on Ethernet PHY failed", err);
     /* Reset Ethernet PHY */
@@ -289,8 +403,7 @@ static esp_err_t ksz8863_init(esp_eth_phy_t *phy)
     phyidr1_reg_t id1;
     phyidr2_reg_t id2;
 	bmcr_reg_t bmcr;
-    PHY_CHECK(eth->phy_reg_read(eth, ksz8863->addr, ETH_PHY_IDR1_REG_ADDR, &(id1.val)) == ESP_OK, "read ID1 failed", err);
-    PHY_CHECK(eth->phy_reg_read(eth, ksz8863->addr, ETH_PHY_IDR2_REG_ADDR, &(id2.val)) == ESP_OK, "read ID2 failed", err);
+    PHY_CHECK(ksz8863_stable_phy_id(eth, ksz8863->addr, &id1.val, &id2.val) == ESP_OK, "unstable PHY chip ID", err);
 	PHY_CHECK(eth->phy_reg_read(eth, ksz8863->addr, ETH_PHY_BMCR_REG_ADDR, &(bmcr.val)) == ESP_OK, "read BMCR failed", err);
 	ESP_LOGI(TAG, "BMCR: %d", bmcr.val);
 	bmsr_reg_t bmsr;
@@ -337,6 +450,7 @@ esp_eth_phy_t *esp_eth_phy_new_ksz8863(const eth_phy_config_t *config)
     ksz8863->name = "ksz8863";
     ksz8863->addr = config->phy_addr;
     ksz8863->reset_timeout_ms = config->reset_timeout_ms;
+    ksz8863->reset_gpio_num = config->reset_gpio_num;
     ksz8863->link_status = ETH_LINK_DOWN;
     ksz8863->autonego_timeout_ms = config->autonego_timeout_ms;
     ksz8863->parent.reset = ksz8863_reset;
@@ -354,4 +468,114 @@ esp_eth_phy_t *esp_eth_phy_new_ksz8863(const eth_phy_config_t *config)
     return &(ksz8863->parent);
 err:
     return NULL;
+}
+
+// Called from the existing PHY poller, never from a competing application task.
+// Only MIB indirect-read selector writes are issued; counter reads clear those
+// per-port counters, so logged values are intervals, not lifetime totals.
+static esp_err_t ksz8863_global_read(esp_eth_mediator_t *eth, uint8_t reg, uint32_t *value)
+{
+    if (ksz_v3_profile < 0) return ESP_ERR_INVALID_STATE;
+    return eth->phy_reg_read(eth, SMS_KSZ_V3_SMI_BASE + (unsigned)ksz_v3_profile, reg, value);
+}
+
+static esp_err_t ksz8863_mib_read(esp_eth_mediator_t *eth, uint8_t index, uint32_t *value, bool *overflow)
+{
+    if (ksz_v3_profile < 0) return ESP_ERR_INVALID_STATE;
+    uint32_t access = SMS_KSZ_V3_SMI_BASE + (unsigned)ksz_v3_profile;
+    esp_err_t err = eth->phy_reg_write(eth, access, 0x79, 0x1c);
+    if (err != ESP_OK) return err;
+    uint32_t selector = 0;
+    err = ksz8863_global_read(eth, 0x79, &selector);
+    if (err != ESP_OK || selector != 0x1c) return ESP_ERR_INVALID_RESPONSE;
+    err = eth->phy_reg_write(eth, access, 0x7a, index);
+    if (err != ESP_OK) return err;
+    err = ksz8863_global_read(eth, 0x7a, &selector);
+    if (err != ESP_OK || selector != index) return ESP_ERR_INVALID_RESPONSE;
+    uint32_t high = 0;
+    for (unsigned attempt = 0; attempt < 3; ++attempt) {
+        err = ksz8863_global_read(eth, 0x80, &high);
+        if (err != ESP_OK) return err;
+        if (high & 0x40) break;
+    }
+    if (!(high & 0x40)) return ESP_ERR_TIMEOUT;
+    *overflow = (high & 0x80) != 0;
+    uint32_t result = high & 0x3f;
+    for (unsigned reg = 0x81; reg <= 0x83; ++reg) {
+        uint32_t byte;
+        err = ksz8863_global_read(eth, (uint8_t)reg, &byte);
+        if (err != ESP_OK) return err;
+        result = (result << 8) | byte;
+    }
+    *value = result;
+    return ESP_OK;
+}
+
+static void ksz8863_snapshot_globals(esp_eth_mediator_t *eth)
+{
+    TickType_t now = xTaskGetTickCount();
+    if ((TickType_t)(now - ksz_v3_last_tick) < pdMS_TO_TICKS(30000)) return;
+    ksz8863_probe_v3(eth, "periodic");
+    if (ksz_v3_profile < 0) return;
+    uint32_t host = 0;
+    esp_err_t err = ESP_OK;
+    if (ksz8863_global_read(eth, 0xc6, &host) != ESP_OK) return;
+    ESP_LOGI(TAG, "NET KSZ v3 C6=%02x host_mode=%u P3_internal_clock=%u", host, host & 3, (host >> 3) & 1);
+    const uint8_t regs[] = {0x03,0x05,0x06,0x10,0x11,0x12,0x20,0x21,0x22,0x30,0x31,0x32,0x35,0x3f,0xa6,0xc3};
+    for (unsigned i = 0; i < sizeof(regs); ++i) {
+        uint32_t byte = 0;
+        err = ksz8863_global_read(eth, regs[i], &byte);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "NET KSZ global reg[%02x] failed: %s", regs[i], esp_err_to_name(err));
+            return;
+        }
+        ESP_LOGI(TAG, "NET KSZ global reg[%02x]=%02x", regs[i], byte);
+    }
+    for (unsigned port = 1; port <= 2; ++port) {
+        uint32_t status0 = 0, status1 = 0;
+        uint8_t reg = port == 1 ? 0x1e : 0x2e;
+        if (ksz8863_global_read(eth, reg, &status0) != ESP_OK ||
+            ksz8863_global_read(eth, reg + 1, &status1) != ESP_OK) {
+            ESP_LOGW(TAG, "NET copper P%u status read failed; no negotiated-mode claim", port);
+            return;
+        }
+        if (status0 & 0x20)
+            ESP_LOGI(TAG, "NET copper P%u link=1 AN_done=%u speed=%uMbps duplex=%s raw=%02x/%02x",
+                     port, (status0 >> 6) & 1, status1 & 4 ? 100 : 10,
+                     status1 & 2 ? "full" : "half", status0, status1);
+        else ESP_LOGI(TAG, "NET copper P%u link=0 speed/duplex=unavailable raw=%02x/%02x", port, status0, status1);
+    }
+    // Per-port table offsets: good broadcasts, CRC/alignment/symbol errors,
+    // fragments, and good transmitted broadcasts. Port bases are 00/20/40.
+    const uint8_t offsets[] = {0x0b,0x07,0x08,0x06,0x03,0x18};
+    uint32_t samples[3][6] = {{0}}, overflow_masks[3] = {0};
+    for (unsigned port = 0; port < 3; ++port) {
+        uint32_t *values = samples[port];
+        for (unsigned i = 0; i < sizeof(offsets); ++i) {
+            bool overflow = false;
+            err = ksz8863_mib_read(eth, (uint8_t)(port * 0x20 + offsets[i]), &values[i], &overflow);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "NET KSZ MIB port=%u counter=%02x failed: %s (partial sample)",
+                         port + 1, offsets[i], esp_err_to_name(err));
+                return;
+            }
+            if (overflow) overflow_masks[port] |= 1U << i;
+        }
+    }
+    const uint32_t expected[] = {0x88,0x31,SMS_KSZ_HOST_CONTROL4,0x80,0x22,0x1430,0x22,0x1430};
+    const uint32_t masks[] = {0xff,0xf1,0xff,0xff,0xffff,0xfff0,0xffff,0xfff0};
+    for (unsigned ref = 0; ref < 8; ++ref) {
+        uint32_t value = 0;
+        esp_err_t check = ksz8863_v3_read(eth, (unsigned)ksz_v3_profile, ref, &value);
+        if (check != ESP_OK || (value & masks[ref]) != expected[ref]) {
+            ESP_LOGW(TAG, "NET KSZ v3 post-MIB reference failed ref=%u raw=%04x; discarded interval, counters may have cleared", ref, value);
+            ksz_v3_profile = -1;
+            return;
+        }
+    }
+    for (unsigned port = 0; port < 3; ++port) {
+        uint32_t *values = samples[port];
+        ESP_LOGI(TAG, "NET KSZ MIB v3 validated interval P%u rx_bcast=%u rx_crc=%u rx_align=%u rx_symbol=%u rx_frag=%u tx_bcast=%u overflow_mask=%02x",
+                 port + 1, values[0],values[1],values[2],values[3],values[4],values[5],overflow_masks[port]);
+    }
 }

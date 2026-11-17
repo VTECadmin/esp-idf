@@ -23,7 +23,8 @@ GENERATORS = collections.OrderedDict([
     # - dry_run: command to run in dry run mode
     # - verbose_flag: verbose flag
     ("Ninja", {
-        "command": ["ninja"],
+        "command": ["ninja"] + (["-j", os.environ["SMS_BUILD_JOBS"]]
+                                if os.environ.get("SMS_BUILD_JOBS") else []),
         "version": ["ninja", "--version"],
         "dry_run": ["ninja", "-n"],
         "verbose_flag": "-v"

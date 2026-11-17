@@ -18,7 +18,7 @@
 #include "esp_event.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/timers.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "esp_eth";
 #define ETH_CHECK(a, str, goto_tag, ret_value, ...)                               \
@@ -53,7 +53,9 @@ typedef struct {
     esp_eth_mediator_t mediator;
     esp_eth_phy_t *phy;
     esp_eth_mac_t *mac;
-    TimerHandle_t check_link_timer;
+    TaskHandle_t link_task;
+    SemaphoreHandle_t link_lock;
+    TickType_t link_period;
     eth_speed_t speed;
     eth_duplex_t duplex;
     eth_link_t link;
@@ -151,13 +153,25 @@ err:
     return ret;
 }
 
-static void eth_check_link_timer_cb(TimerHandle_t xTimer)
+// PHY negotiation and management I/O can wait for seconds. Keep them out of
+// the shared FreeRTOS timer daemon. STOP wakes this task and drains an in-flight
+// poll under link_lock before stopping the MAC; uninstall then deletes the task.
+static void eth_check_link_task(void *arg)
 {
-    esp_eth_driver_t *eth_driver = (esp_eth_driver_t *)pvTimerGetTimerID(xTimer);
-    esp_eth_phy_t *phy = eth_driver->phy;
-    esp_eth_increase_reference(eth_driver);
-    phy->get_link(phy);
-    esp_eth_decrease_reference(eth_driver);
+    esp_eth_driver_t *eth_driver = arg;
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        while (atomic_load(&eth_driver->fsm) == ESP_ETH_FSM_START) {
+            if (ulTaskNotifyTake(pdTRUE, eth_driver->link_period)) continue;
+            xSemaphoreTake(eth_driver->link_lock, portMAX_DELAY);
+            if (atomic_load(&eth_driver->fsm) == ESP_ETH_FSM_START) {
+                esp_eth_increase_reference(eth_driver);
+                eth_driver->phy->get_link(eth_driver->phy);
+                esp_eth_decrease_reference(eth_driver);
+            }
+            xSemaphoreGive(eth_driver->link_lock);
+        }
+    }
 }
 
 ////////////////////////////////User face APIs////////////////////////////////////////////////
@@ -197,9 +211,12 @@ esp_err_t esp_eth_driver_install(const esp_eth_config_t *config, esp_eth_handle_
     ETH_CHECK(phy->set_mediator(phy, &eth_driver->mediator) == ESP_OK, "set mediator for phy failed", err_mediator, ESP_FAIL);
     ETH_CHECK(mac->init(mac) == ESP_OK, "init mac failed", err_init_mac, ESP_FAIL);
     ETH_CHECK(phy->init(phy) == ESP_OK, "init phy failed", err_init_phy, ESP_FAIL);
-    eth_driver->check_link_timer = xTimerCreate("eth_link_timer", pdMS_TO_TICKS(config->check_link_period_ms), pdTRUE,
-                                   eth_driver, eth_check_link_timer_cb);
-    ETH_CHECK(eth_driver->check_link_timer, "create eth_link_timer failed", err_create_timer, ESP_FAIL);
+    eth_driver->link_period = pdMS_TO_TICKS(config->check_link_period_ms);
+    ETH_CHECK(eth_driver->link_period, "invalid link poll period", err_create_timer, ESP_ERR_INVALID_ARG);
+    eth_driver->link_lock = xSemaphoreCreateMutex();
+    ETH_CHECK(eth_driver->link_lock, "create link mutex failed", err_create_timer, ESP_ERR_NO_MEM);
+    ETH_CHECK(xTaskCreate(eth_check_link_task, "eth_link", 4096, eth_driver, 2, &eth_driver->link_task) == pdPASS,
+              "create link worker failed", err_create_timer, ESP_ERR_NO_MEM);
     *out_hdl = (esp_eth_handle_t)eth_driver;
 
     // for backward compatible to 4.0, and will get removed in 5.0
@@ -210,6 +227,7 @@ esp_err_t esp_eth_driver_install(const esp_eth_config_t *config, esp_eth_handle_
 
     return ESP_OK;
 err_create_timer:
+    if (eth_driver->link_lock) vSemaphoreDelete(eth_driver->link_lock);
     phy->deinit(phy);
 err_init_phy:
     mac->deinit(mac);
@@ -241,7 +259,8 @@ esp_err_t esp_eth_driver_uninstall(esp_eth_handle_t hdl)
     }
     esp_eth_mac_t *mac = eth_driver->mac;
     esp_eth_phy_t *phy = eth_driver->phy;
-    ETH_CHECK(xTimerDelete(eth_driver->check_link_timer, 0) == pdPASS, "delete eth_link_timer failed", err, ESP_FAIL);
+    vTaskDelete(eth_driver->link_task);
+    vSemaphoreDelete(eth_driver->link_lock);
     ETH_CHECK(phy->deinit(phy) == ESP_OK, "deinit phy failed", err, ESP_FAIL);
     ETH_CHECK(mac->deinit(mac) == ESP_OK, "deinit mac failed", err, ESP_FAIL);
     free(eth_driver);
@@ -263,13 +282,12 @@ esp_err_t esp_eth_start(esp_eth_handle_t hdl)
         goto err;
     }
     // ETH_CHECK(eth_driver->phy->reset(eth_driver->phy) == ESP_OK, "reset phy failed", err, ESP_FAIL);
-    ETH_CHECK(xTimerStart(eth_driver->check_link_timer, 0) == pdPASS,
-              "start eth_link_timer failed", err, ESP_FAIL);
     ETH_CHECK(esp_event_post(ETH_EVENT, ETHERNET_EVENT_START, &eth_driver, sizeof(eth_driver), 0) == ESP_OK,
               "send ETHERNET_EVENT_START event failed", err_event, ESP_FAIL);
+    xTaskNotifyGive(eth_driver->link_task);
     return ESP_OK;
 err_event:
-    xTimerStop(eth_driver->check_link_timer, 0);
+    atomic_store(&eth_driver->fsm, ESP_ETH_FSM_STOP);
 err:
     return ret;
 }
@@ -287,9 +305,11 @@ esp_err_t esp_eth_stop(esp_eth_handle_t hdl)
         goto err;
     }
     esp_eth_mac_t *mac = eth_driver->mac;
-    ETH_CHECK(mac->stop(mac) == ESP_OK, "stop mac failed", err, ESP_FAIL);
-    ETH_CHECK(xTimerStop(eth_driver->check_link_timer, 0) == pdPASS,
-              "stop eth_link_timer failed", err, ESP_FAIL);
+    xTaskNotifyGive(eth_driver->link_task);
+    xSemaphoreTake(eth_driver->link_lock, portMAX_DELAY);
+    esp_err_t stop_err = mac->stop(mac);
+    xSemaphoreGive(eth_driver->link_lock);
+    ETH_CHECK(stop_err == ESP_OK, "stop mac failed", err, ESP_FAIL);
     ETH_CHECK(esp_event_post(ETH_EVENT, ETHERNET_EVENT_STOP, &eth_driver, sizeof(eth_driver), 0) == ESP_OK,
               "send ETHERNET_EVENT_STOP event failed", err, ESP_FAIL);
     return ESP_OK;
