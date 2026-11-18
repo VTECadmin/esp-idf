@@ -32,11 +32,16 @@ static esp_err_t eth_input_to_netif(esp_eth_handle_t eth_handle, uint8_t *buffer
 
 static esp_err_t esp_eth_post_attach(esp_netif_t *esp_netif, void *args)
 {
-    uint8_t eth_mac[6];
+    if (!esp_netif || !args) return ESP_ERR_INVALID_ARG;
+    uint8_t eth_mac[6] = {0};
     esp_eth_netif_glue_t *glue = (esp_eth_netif_glue_t *)args;
     glue->base.netif = esp_netif;
 
-    esp_eth_update_input_path(glue->eth_driver, eth_input_to_netif, esp_netif);
+    esp_err_t err = esp_eth_update_input_path(glue->eth_driver, eth_input_to_netif, esp_netif);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG,"Ethernet input attachment warning: %s",esp_err_to_name(err));
+        return err;
+    }
 
     // set driver related config to esp-netif
     esp_netif_driver_ifconfig_t driver_ifconfig = {
@@ -45,12 +50,24 @@ static esp_err_t esp_eth_post_attach(esp_netif_t *esp_netif, void *args)
         .driver_free_rx_buffer = NULL
     };
 
-    ESP_ERROR_CHECK(esp_netif_set_driver_config(esp_netif, &driver_ifconfig));
-    esp_eth_ioctl(glue->eth_driver, ETH_CMD_G_MAC_ADDR, eth_mac);
+    err = esp_netif_set_driver_config(esp_netif, &driver_ifconfig);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG,"Ethernet driver configuration warning: %s",esp_err_to_name(err));
+        return err;
+    }
+    err = esp_eth_ioctl(glue->eth_driver, ETH_CMD_G_MAC_ADDR, eth_mac);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG,"Ethernet MAC read warning: %s",esp_err_to_name(err));
+        return err;
+    }
     ESP_LOGI(TAG, "%02x:%02x:%02x:%02x:%02x:%02x", eth_mac[0], eth_mac[1],
              eth_mac[2], eth_mac[3], eth_mac[4], eth_mac[5]);
 
-    esp_netif_set_mac(esp_netif, eth_mac);
+    err = esp_netif_set_mac(esp_netif, eth_mac);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG,"Ethernet MAC attachment warning: %s",esp_err_to_name(err));
+        return err;
+    }
     ESP_LOGI(TAG, "ethernet attached to netif");
 
     return ESP_OK;
