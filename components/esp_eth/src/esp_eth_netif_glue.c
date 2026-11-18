@@ -39,7 +39,7 @@ static esp_err_t esp_eth_post_attach(esp_netif_t *esp_netif, void *args)
 
     esp_err_t err = esp_eth_update_input_path(glue->eth_driver, eth_input_to_netif, esp_netif);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG,"Ethernet input attachment warning: %s",esp_err_to_name(err));
+        ESP_LOGE(TAG,"Ethernet input attachment FAILED: %s",esp_err_to_name(err));
         return err;
     }
 
@@ -52,12 +52,12 @@ static esp_err_t esp_eth_post_attach(esp_netif_t *esp_netif, void *args)
 
     err = esp_netif_set_driver_config(esp_netif, &driver_ifconfig);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG,"Ethernet driver configuration warning: %s",esp_err_to_name(err));
+        ESP_LOGE(TAG,"Ethernet driver configuration FAILED: %s",esp_err_to_name(err));
         return err;
     }
     err = esp_eth_ioctl(glue->eth_driver, ETH_CMD_G_MAC_ADDR, eth_mac);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG,"Ethernet MAC read warning: %s",esp_err_to_name(err));
+        ESP_LOGE(TAG,"Ethernet MAC read FAILED: %s",esp_err_to_name(err));
         return err;
     }
     ESP_LOGI(TAG, "%02x:%02x:%02x:%02x:%02x:%02x", eth_mac[0], eth_mac[1],
@@ -65,7 +65,7 @@ static esp_err_t esp_eth_post_attach(esp_netif_t *esp_netif, void *args)
 
     err = esp_netif_set_mac(esp_netif, eth_mac);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG,"Ethernet MAC attachment warning: %s",esp_err_to_name(err));
+        ESP_LOGE(TAG,"Ethernet MAC attachment FAILED: %s",esp_err_to_name(err));
         return err;
     }
     ESP_LOGI(TAG, "ethernet attached to netif");

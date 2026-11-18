@@ -32,7 +32,7 @@ static const char *TAG = "ksz8863";
     {                                                                             \
         if (!(a))                                                                 \
         {                                                                         \
-            ESP_LOGW(TAG, "%s(%d): " str, __FUNCTION__, __LINE__, ##__VA_ARGS__); \
+            ESP_LOGE(TAG, "%s(%d): " str, __FUNCTION__, __LINE__, ##__VA_ARGS__); \
             goto goto_tag;                                                        \
         }                                                                         \
     } while (0)
@@ -386,7 +386,7 @@ static esp_err_t ksz8863_stable_phy_id(esp_eth_mediator_t *eth, uint32_t addr,
                             addr, attempt + 1, one, two, esp_err_to_name(err));
         vTaskDelay(pdMS_TO_TICKS(10));
     }
-    ESP_LOGW(TAG, "NET KSZ v3 PHY identification remains unconfirmed; startup validation is advisory");
+    ESP_LOGE(TAG, "NET KSZ v3 PHY identification FAILED (unconfirmed); startup validation is advisory");
     return ESP_ERR_INVALID_RESPONSE;
 }
 
@@ -400,17 +400,17 @@ static esp_err_t ksz8863_init(esp_eth_phy_t *phy)
     // The switch was configured by the board startup code. An unavailable
     // management read does not prove the forwarding/data path is unusable.
     esp_err_t err = ksz8863_pwrctl(phy, true);
-    if (err != ESP_OK) ESP_LOGW(TAG, "KSZ PHY power-state request unconfirmed: %s; continuing", esp_err_to_name(err));
+    if (err != ESP_OK) ESP_LOGE(TAG, "KSZ PHY STARTUP CHECK FAILED: power-state request unconfirmed: %s; continuing", esp_err_to_name(err));
     uint32_t id1 = 0, id2 = 0;
     err = ksz8863_stable_phy_id(eth, ksz8863->addr, &id1, &id2);
-    if (err != ESP_OK) ESP_LOGW(TAG, "KSZ PHY ID validation warning: %s; continuing driver initialization", esp_err_to_name(err));
+    if (err != ESP_OK) ESP_LOGE(TAG, "KSZ PHY STARTUP CHECK FAILED: PHY ID validation: %s; continuing driver initialization", esp_err_to_name(err));
     const uint8_t regs[] = {ETH_PHY_BMCR_REG_ADDR, ETH_PHY_BMSR_REG_ADDR,
         ETH_PHY_ANAR_REG_ADDR, ETH_PHY_ANLPAR_REG_ADDR, ETH_PHY_ANER_REG_ADDR,
         ETH_PHY_LCS_REG_ADDR, ETH_PHY_PSCSR_REG_ADDR};
     for (unsigned i = 0; i < sizeof(regs); ++i) {
         uint32_t value = 0;
         err = eth->phy_reg_read(eth, ksz8863->addr, regs[i], &value);
-        if (err != ESP_OK) ESP_LOGW(TAG, "KSZ PHY startup read warning: reg=0x%02x read=%s; continuing", regs[i], esp_err_to_name(err));
+        if (err != ESP_OK) ESP_LOGE(TAG, "KSZ PHY STARTUP CHECK FAILED: reg=0x%02x read=%s; continuing", regs[i], esp_err_to_name(err));
         else ESP_LOGI(TAG, "KSZ PHY startup: phy=%u reg=0x%02x raw=0x%04x", ksz8863->addr, regs[i], value);
     }
     return ESP_OK;
