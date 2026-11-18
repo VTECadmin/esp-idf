@@ -514,7 +514,7 @@ static esp_err_t ksz8863_mib_read(esp_eth_mediator_t *eth, uint8_t index, uint32
 static void ksz8863_snapshot_globals(esp_eth_mediator_t *eth)
 {
     TickType_t now = xTaskGetTickCount();
-    if ((TickType_t)(now - ksz_v3_last_tick) < pdMS_TO_TICKS(30000)) return;
+    if ((TickType_t)(now - ksz_v3_last_tick) < pdMS_TO_TICKS(10 * 60 * 1000)) return; /* Periodic survey every 10 minutes. */
     ksz8863_probe_v3(eth, "periodic");
     if (ksz_v3_profile < 0) return;
     uint32_t host = 0;
